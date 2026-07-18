@@ -448,7 +448,8 @@ def test_read_history_keeps_original_prefix_and_appends_grid_inspector(tmp_path)
         "  4@[r0..1,c0..1] from={0:4} to={1:4}\n"
         "    patch before=[[0,0],[0,0]] after=[[1,1],[1,1]]\n"
         "value_pairs={0->1:4}\n"
-        "Click targets (auto, 1; component-based, unverified): [[0,0]]"
+        "Current-grid click target proposals (1; component-based, unverified; "
+        "pass selected coordinates as run_bfs clicks): [[0,0]]"
     )
 
 

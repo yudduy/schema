@@ -854,7 +854,9 @@ class LocusService:
             if 6 in self.gateway.gateway.legal_actions:
                 targets = discover_click_targets(self.gateway.gateway.grid)
                 appendix += (
-                    f"\nClick targets (auto, {len(targets)}; component-based, unverified): "
+                    f"\nCurrent-grid click target proposals ({len(targets)}; "
+                    "component-based, unverified; pass selected coordinates as "
+                    "run_bfs clicks): "
                     + json.dumps(targets, separators=(",", ":"))
                 )
             return result + "\n" + appendix
