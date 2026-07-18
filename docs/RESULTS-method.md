@@ -97,6 +97,8 @@ A required post-setup audit of the complete [public Schema report](https://schem
 
 The exact no-timeout/native-compaction launcher was dry-smoked at `/private/tmp/schema-v15-native-dry.YQDB0r`. It created `autoCompactEnabled: true` before harness initialization, preserved prompt hash `a9860a5c…`, produced the expected one legal scripted action and 11-event scorer-accepted stream, and passed the anti-cheat guard. This validates configuration and prompt plumbing only, not live behavior.
 
+At 14:38 PDT, before the provider reset, the 18-file censored cd82 workdir was copied byte-for-byte to `/private/tmp/schema-m3-cd82-v15.QkTxZ9.censored`; a relative-path/content digest matches the active source at `a9201a7c…`. The active workdir then changed exactly `config/claude/settings.json` from `autoCompactEnabled: false` to `true`, yielding digest `def13ff6…`; recursive comparison confirms every other file is identical to the preserved copy. `DISABLE_AUTO_COMPACT` was absent. This is the sole predeclared measured-workdir configuration change, and it occurred before any productive model turn.
+
 With no runner active, the official `arc-agi==0.9.9` NORMAL-mode acquisition path then prefetched the 21 remaining exact benchmark versions into the ignored local cache. `Arcade.make` internally instantiated and reset each environment, but no frame was rendered or inspected and no model or non-RESET gameplay action ran; the setup scorecard was closed. A final OFFLINE scan matched all 25 IDs in `vendor/baseline_actions.csv` exactly. This is provisioning evidence only, not a measured game exposure, and it leaves the committed harness tree unchanged.
 
 ## Bottleneck Diagnosis
