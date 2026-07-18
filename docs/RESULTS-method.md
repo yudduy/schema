@@ -17,8 +17,9 @@ This ledger covers GOAL1 prompt/reasoning experiments. BP35 is the contaminated 
 | v6 surprise ownership, live | Fable 5 | 5 | 7 | $18.327839 | 0/9, 0.00% RHAE | clean |
 | v7 local equivariance, live | Fable 5 | 8 across 2 invocations | 15 | $19.694335 | 0/9, 0.00% RHAE | clean |
 | v8 observed geometry | scripted dry stub | 1 | 1 | $0 | prompt plumbing only; no live evidence | clean |
+| v8 observed geometry, live | Fable 5 | 7 settled + 1 timeout | 17 | at least $28.000493 | 1/9, 2.22% RHAE; L0 cleared in 17 vs human 21 | clean |
 
-All prompt hashes match their snapshotted `run.json` values, and the vendored scorer accepts every event stream. The v7 source and frozen run prompt match `bbd457ff…`; the v8 source and dry snapshot match `934dd71e…`. The v4 Fable total spans four invocations; two settled turns were subscription-limit errors. Its configured run-cost cap reset on resume, so this run is not clean budget evidence. The short v4 stream lacks final telemetry, making its true cost unprovable. GOAL2 launched a concurrent paid run after the v5 live run began, so v5 is diagnostic rather than concurrency-controlled evidence. V7 waited for the other live runner to exit, but its continuation cap also reset; the final $7.000283 turn exceeded the $5 turn cap and brought the cumulative run $1.694335 above the intended $18 ceiling.
+All prompt hashes match their snapshotted `run.json` values, and the vendored scorer accepts every event stream. The v7 source and frozen run prompt match `bbd457ff…`; the v8 source, dry snapshot, and live snapshot match `934dd71e…`. The v4 Fable total spans four invocations; two settled turns were subscription-limit errors. Its configured run-cost cap reset on resume, so this run is not clean budget evidence. The short v4 stream lacks final telemetry, making its true cost unprovable. GOAL2 launched a concurrent paid run after the v5 live run began, so v5 is diagnostic rather than concurrency-controlled evidence. V7 waited for the other live runner to exit, but its continuation cap also reset; the final $7.000283 turn exceeded the $5 turn cap and brought the cumulative run $1.694335 above the intended $18 ceiling. V8's first invocation reached $24.656318 against a $22 cap. Its two-turn continuation added $3.344175 of settled telemetry, but GOAL2 launched another runner eight seconds after it began, and its final 1,200-second turn timed out without cost telemetry. The clear is therefore valid game evidence but not concurrency-controlled or exact total-cost evidence.
 
 ## Bottleneck Diagnosis
 
@@ -37,6 +38,14 @@ All prompt hashes match their snapshotted `run.json` values, and the vendored sc
 - Local BFS does not search `is_goal`; that function only enables the tool. Search succeeds only when `predict()` emits `level_up` or `win`. A replay-green model can therefore be non-plannable.
 
 The released successful BP35 artifact resolves the reveal-replay ambiguity. Its level-0 snapshot is 10,061 bytes and contains 60 exact observed `LEVEL0_TOP` rows; its final 92,468-byte model contains 1,016 literal map rows. Its notes explicitly describe ingesting observations and seeding newly revealed per-level geometry before returning to a green backtest. Thus v7's blanket large-frame prohibition contradicted the published method on the contaminated development game.
+
+V8 matched that published level-0 representation pattern and passed the development gate:
+
+- The first scroll occurred at action 4. V8 uniquely registered camera offset `-18`, mechanically extracted 18 newly observed static rows, injected them into `init_state`, locally replayed all four transitions with zero diffs, and obtained `4/4` from the harness backtest before acting.
+- The next click-and-scroll added 24 more observed rows and returned `5/5`. Subsequent checkpoints were `6/6`, `12/12`, and `13/13`; no reveal was accepted as a permanent exception.
+- The level cleared at action 17, four actions below the human baseline and two below the released Fable trajectory. The scorer reports 1/9 and 2.22% RHAE. The contact initially missed only the terminal flag (`16/17`, `#16:level_up`); the timed-out final turn still installed the flag and restored `17/17` before falling back without an action.
+- The final 13,180-byte model contains exactly 60 literal observed rows, matching the released level-0 seed count. Across seven committed turns, 25 proposed actions produced 17 executions; six surprises dropped eight suffix actions. No `is_goal` or BFS call appeared.
+- Phase latency is now dominant: several repair turns spent long periods before their first tool call, and the level-1 terminal repair exhausted the 1,200-second timeout despite requiring only one evidenced flag. Geometry fidelity no longer explains the stall.
 
 This supports the executable-world-model distinction between data fit and plannability described by [Schema Harness](https://schema-harness.github.io/), [WorldCoder](https://arxiv.org/abs/2402.12275), and [Executable World Models](https://arxiv.org/abs/2605.05138).
 
@@ -58,6 +67,8 @@ After v6, the distribution shifted again: local-equivariance/coordinate alternat
 
 After v7 and inspection of the released BP35 success, the next-change distribution is: retrospective exact geometry seeding 55%, decision-relevant probe ordering 20%, phase/cost control 12%, neighbor-conditioned rule repair 8%, and terminal-flag/BFS coupling 5%. V8 changes only v7's no-frame paragraph. It permits mechanically extracted, observed-only static row or tile seeds, requires persistent-coordinate overlap and dimension assertions, and forbids inventing unseen cells or mixing sprites, HUD, and mutable objects into static seeds. The decisive signature is that a first-scroll `N-1/N` mismatch becomes fully green on the next repair cycle.
 
+V8 produced that signature and a development-game clear, so it is frozen for one clean held-out run before another prompt change. The remaining candidates are phase/decision discipline first, then terminal-flag/BFS coupling once a clean run provides an evidenced goal predicate. Adding either to the held-out test would destroy attribution.
+
 ## Status and Uncertainty
 
-M0 remains proven. M1 is not satisfied: no clean game has cleared a level. The next required evidence is a fresh v8 BP35 diagnostic, followed by a held-out run only if observed reveals enter initialization, replay becomes fully green, and the predicted process signature appears. No claim of generalization or ~99% reproduction is currently supported.
+M0 remains proven, and the contaminated development gate now passes: v8 cleared BP35 level 0 within its 21-action boundary while maintaining exact retrospective replay. M1 is still not satisfied because no clean game has cleared a level. The next required evidence is an unchanged v8 run on preselected, unopened `vc33`; a level-0 clear by action 21 with an audit-clean stream is the clean pass condition. No claim of generalization or ~99% reproduction is currently supported.
