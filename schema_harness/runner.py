@@ -740,6 +740,7 @@ def run_live(args: argparse.Namespace) -> int:
     no_progress = 0
     previous_level = snapshot.level
     previous_history = snapshot.history_len
+    driver_failed = False
     first_turn = next_turn_number(workdir)
     previous = load_previous_committed_turn(workdir, first_turn)
     surprise = previous.result.surprise if previous is not None else ""
@@ -861,6 +862,10 @@ def run_live(args: argparse.Namespace) -> int:
             {"cwd": str(workdir), "sid": session_id, "resume": resume},
         )
 
+        if bool(result.get("is_error")):
+            print("stopping: claude driver returned an error")
+            driver_failed = True
+            break
         if turn_cost > args.turn_cost_cap:
             print(f"stopping: per-turn cost cap ${args.turn_cost_cap:.2f} exceeded")
             break
@@ -875,7 +880,7 @@ def run_live(args: argparse.Namespace) -> int:
 
     final_snapshot = load_snapshot(workdir)
     _finish_run(workdir, final_snapshot, start_history_len=start_history_len)
-    return 0
+    return 1 if driver_failed else 0
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

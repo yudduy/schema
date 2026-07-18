@@ -293,3 +293,46 @@ def test_process_restart_recovers_session_and_last_commit(tmp_path):
     )
     assert "Result of your last commit" in message
     assert "stopped because mispredicted" in message
+
+
+def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
+    snapshot = _snapshot()
+    calls = 0
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    def fake_run_turn(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "session_id": "failed-session",
+            "usage": {},
+            "total_cost_usd": 0.0,
+            "num_turns": 1,
+            "is_error": True,
+            "result": "authentication failed",
+        }
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(runner_module, "oauth_token", lambda: "test-token")
+    monkeypatch.setattr(runner_module, "run_claude_turn", fake_run_turn)
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "5",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module.run_live(args) == 1
+    assert calls == 1
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [event["kind"] for event in events].count("turn_started") == 1
+    assert events[-1]["kind"] == "run_finished"
