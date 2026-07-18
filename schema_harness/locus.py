@@ -32,6 +32,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "schema_harness"
 
+from .backtest import ALIGNMENT_BACKTEST_SELECTOR
 from .events import EventLog, ToolFinished, ToolStarted, TurnCommitted
 from .guard import sandbox_exec_argv, shell_command_safe, wrap_python
 from .gateway import (
@@ -72,6 +73,17 @@ CROSS_TRANSITION_GATE_MESSAGE = (
     "Cross-transition gate: a newly supported structural context is available. "
     'Call read_history(detail="full") before committing; no action was taken, and '
     "you may retry this turn."
+)
+MODEL_REPAIR_GATE_MESSAGE = (
+    "Model-repair gate: the latest non-RESET transition surprised the live world "
+    "model, so another non-RESET action requires a green full-history backtest. "
+    "No action was taken; repair the model and retry this turn. Pure RESET queues "
+    "remain available."
+)
+RESET_BOUNDARY_GATE_MESSAGE = (
+    "Reset-boundary gate: while a world model is active, RESET must end the queue "
+    "because full-history alignment reinitializes model state at RESET. No action "
+    "was taken; commit RESET separately, then retry real actions next turn."
 )
 _MODEL_PATTERN = re.compile(r"world_model_v\d+\.py")
 _T = TypeVar("_T")
@@ -610,6 +622,8 @@ class LocusService:
                 rejected=True,
             )
         queue = tuple(QueuedAction.parse(action) for action in actions)
+        has_non_reset = any(action.action != 0 for action in queue)
+        gate_messages: list[str] = []
         if queue and queue[0].action != 0 and not self._full_history_read:
             try:
                 new_topology = self._new_affordance_topology()
@@ -617,13 +631,30 @@ class LocusService:
                 # Inspector failure must never make real actions impossible.
                 new_topology = None
             if new_topology is not None:
-                return self._finished(
-                    call_id,
-                    "commit_actions",
-                    args,
-                    CROSS_TRANSITION_GATE_MESSAGE,
-                    rejected=True,
-                )
+                gate_messages.append(CROSS_TRANSITION_GATE_MESSAGE)
+        needs_model_repair = (
+            has_non_reset
+            and self.gateway.latest_completed_turn_needs_model_repair()
+        )
+        if needs_model_repair:
+            repair_report = self._model_repair_report()
+            if repair_report is not None:
+                gate_messages.append(MODEL_REPAIR_GATE_MESSAGE + "\n" + repair_report)
+        if self.gateway.live_model_path() is not None:
+            reset_seen = False
+            for action in queue:
+                reset_seen = reset_seen or action.action == 0
+                if reset_seen and action.action != 0:
+                    gate_messages.append(RESET_BOUNDARY_GATE_MESSAGE)
+                    break
+        if gate_messages:
+            return self._finished(
+                call_id,
+                "commit_actions",
+                args,
+                "\n".join(gate_messages),
+                rejected=True,
+            )
         output = COMMIT_MESSAGE.format(count=len(queue))
         self._committed = True
         # Match the released ordering: the tool call finishes before the durable
@@ -658,6 +689,44 @@ class LocusService:
         if path is None:
             raise RuntimeError("no world model installed")
         return path
+
+    def _backtest_output(self, selector: Any) -> str:
+        result = self._run_model_worker(
+            "backtest",
+            self._model_path(),
+            {"history": self._history_payload(), "selector": selector},
+            timeout=self.process_timeout,
+        )
+        if not isinstance(result, str):
+            raise RuntimeError("sandboxed backtest returned invalid output")
+        return result
+
+    def _model_repair_report(self) -> str | None:
+        try:
+            with _tool_output_to_stderr():
+                for selector, label in (
+                    ("all", "[all transitions]"),
+                    (ALIGNMENT_BACKTEST_SELECTOR, "[full-history alignment]"),
+                ):
+                    output = self._backtest_output(selector)
+                    green = (
+                        output.startswith(f"backtest {label}: ")
+                        and "; 0 mismatch(es), " in output
+                        and "Model predicts ALL checkable transitions" in output
+                    )
+                    if not green:
+                        return output
+        except _ModelWorkerTimeout:
+            return (
+                "ERROR: required full-history backtest timed out after "
+                f"{_seconds_text(self.process_timeout)}s."
+            )
+        except Exception as exc:
+            return (
+                "ERROR: required full-history backtest failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        return None
 
     def _model_session(
         self,
@@ -703,7 +772,6 @@ class LocusService:
         }.items() if value is not None}
 
         def operation() -> str:
-            model_path = self._model_path()
             timeline = self.gateway.timeline
             selector: Any = "all"
             if indices is not None:
@@ -719,14 +787,7 @@ class LocusService:
                 )
             if max_details is not None and (type(max_details) is not int or max_details < 0):
                 raise ValueError("max_details must be a non-negative integer")
-            output = self._run_model_worker(
-                "backtest",
-                model_path,
-                {"history": self._history_payload(), "selector": selector},
-                timeout=self.process_timeout,
-            )
-            if not isinstance(output, str):
-                raise RuntimeError("sandboxed backtest returned invalid output")
+            output = self._backtest_output(selector)
             artifact = self.workdir / "runtime" / "artifact"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text(output + "\n", encoding="utf-8", newline="")
@@ -1424,6 +1485,8 @@ __all__ = [
     "COMMIT_MESSAGE",
     "CROSS_TRANSITION_GATE_MESSAGE",
     "LOCK_MESSAGE",
+    "MODEL_REPAIR_GATE_MESSAGE",
+    "RESET_BOUNDARY_GATE_MESSAGE",
     "LocusService",
     "commit_actions",
     "cp",

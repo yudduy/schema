@@ -21,6 +21,8 @@ _REPORT_CLAUSE = (
     "grid on non-terminal steps + level_up/dead/win flags on EVERY step"
 )
 _MISMATCH_KINDS = ("grid", "level_up", "dead", "win")
+# Internal repair-gate mode; public selectors and report strings stay unchanged.
+ALIGNMENT_BACKTEST_SELECTOR = "__full_history_alignment__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +317,20 @@ def run_backtest(
     """Backtest a model against selected transitions while threading full history state."""
 
     history = _load_timeline(timeline)
-    selection = _selection(selector, history.transitions)
+    align_to_actual = (
+        isinstance(selector, str)
+        and selector == ALIGNMENT_BACKTEST_SELECTOR
+    )
+    selection = _selection(
+        "all" if align_to_actual else selector,
+        history.transitions,
+    )
+    if align_to_actual:
+        selection = _Selection(
+            selection.indices,
+            "[full-history alignment]",
+            selection.scope,
+        )
     if not history.transitions:
         return BacktestReport(selection.label, 0, 0, 0, 0, (), selection.scope)
 
@@ -392,6 +407,16 @@ def run_backtest(
         if prediction_error:
             set_current_level(model, segment_level)
             state = call_init_state(model, transition.grid)
+        elif align_to_actual:
+            ingest = getattr(model, "ingest", None)
+            if callable(ingest):
+                try:
+                    ingested = ingest(state, transition.grid)
+                    if ingested is not None:
+                        state = ingested
+                except Exception:
+                    set_current_level(model, segment_level)
+                    state = call_init_state(model, transition.grid)
         if transition.level_up:
             segment_level = transition.level
             set_current_level(model, segment_level)
@@ -410,4 +435,9 @@ def run_backtest(
     )
 
 
-__all__ = ["BacktestMismatch", "BacktestReport", "run_backtest"]
+__all__ = [
+    "ALIGNMENT_BACKTEST_SELECTOR",
+    "BacktestMismatch",
+    "BacktestReport",
+    "run_backtest",
+]
