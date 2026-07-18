@@ -2,7 +2,47 @@ from __future__ import annotations
 
 import numpy as np
 
-from schema_harness.inspectors import describe_grid_diff
+from schema_harness.inspectors import describe_grid_diff, discover_click_targets
+
+
+def test_click_targets_use_an_actual_irregular_component_cell_and_xy_order():
+    grid = np.zeros((9, 9), dtype=int)
+    grid[1:4, 1:4] = 2
+    grid[2, 2] = 0
+
+    targets = discover_click_targets(grid)
+
+    assert targets[0] == [2, 1]
+    x, y = targets[0]
+    assert grid[y, x] == 2
+
+
+def test_click_targets_keep_large_fields_as_a_uniform_fallback():
+    assert discover_click_targets(np.full((64, 64), 7, dtype=int)) == [[31, 31]]
+
+
+def test_click_targets_are_bounded_unique_and_spatially_distributed():
+    rows, cols = np.indices((64, 64))
+    checkerboard = (rows + cols) % 2
+
+    targets = discover_click_targets(checkerboard)
+
+    assert len(targets) == 32
+    assert len({tuple(target) for target in targets}) == 32
+    assert {int(checkerboard[y, x]) for x, y in targets} == {0, 1}
+    assert min(x for x, _ in targets) <= 1 and max(x for x, _ in targets) >= 62
+    assert min(y for _, y in targets) <= 1 and max(y for _, y in targets) >= 62
+
+
+def test_click_targets_rank_compact_objects_before_large_fields():
+    grid = np.zeros((16, 16), dtype=int)
+    grid[2:5, 2:5] = 3
+    grid[3, 3] = 0
+
+    targets = discover_click_targets(grid)
+
+    assert targets[0] == [3, 2]
+    assert targets[-1] == [8, 8]
 
 
 def test_grid_diff_describes_disconnected_motion_and_status_change():

@@ -41,7 +41,7 @@ from .gateway import (
     Transition,
     WorldModelPrediction,
 )
-from .inspectors import describe_grid_diff
+from .inspectors import describe_grid_diff, discover_click_targets
 from .model_loader import ModelInterface
 
 
@@ -717,7 +717,7 @@ class LocusService:
         max_depth: int,
         max_nodes: int | None = None,
     ) -> str:
-        """Run bounded model BFS with an enforced wall-clock timeout."""
+        """Run bounded model BFS with caller-supplied click targets."""
 
         args: dict[str, Any] = {
             "target": target,
@@ -777,7 +777,7 @@ class LocusService:
         indices: list[int] | None = None,
         detail: str = "full",
     ) -> str:
-        """Read a compact summary and selected transition details."""
+        """Read history; full detail includes grid diffs and current click targets."""
 
         args: dict[str, Any] = {"detail": detail}
         if indices is not None:
@@ -851,6 +851,12 @@ class LocusService:
             )
             if inspector_records:
                 appendix += "\n" + "\n".join(inspector_records)
+            if 6 in self.gateway.gateway.legal_actions:
+                targets = discover_click_targets(self.gateway.gateway.grid)
+                appendix += (
+                    f"\nClick targets (auto, {len(targets)}; component-based, unverified): "
+                    + json.dumps(targets, separators=(",", ":"))
+                )
             return result + "\n" + appendix
 
         return str(self._invoke("read_history", args, operation))
@@ -1231,7 +1237,7 @@ def run_bfs(
     max_depth: int,
     max_nodes: int | None = None,
 ) -> str:
-    """Search the live world model for a bounded action plan."""
+    """Search the model using caller-supplied clicks, such as targets from full history."""
 
     return _service().run_bfs(target, clicks, max_depth=max_depth, max_nodes=max_nodes)
 
@@ -1241,7 +1247,7 @@ def read_history(
     indices: list[int] | None = None,
     detail: str = "full",
 ) -> str:
-    """Read selected persisted environment transitions."""
+    """Read transitions; full detail adds grid diffs and current geometric click targets."""
 
     return _service().read_history(indices, detail)
 

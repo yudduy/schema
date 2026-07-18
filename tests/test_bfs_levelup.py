@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from schema_harness.bfs import run_bfs
+from schema_harness.inspectors import discover_click_targets
 from schema_harness.model_loader import (
     call_init_state,
     call_predict,
@@ -28,7 +29,7 @@ def _bp35_actions():
     ]
 
 
-def test_bfs_finds_and_reverified_click_plan_that_levels_up():
+def _state_before_first_level_up():
     actions = _bp35_actions()
     model = load_model(BP35_MODEL)
     set_current_level(model, 1)
@@ -62,6 +63,11 @@ def test_bfs_finds_and_reverified_click_plan_that_levels_up():
         if not terminal:  # grid compared only on non-terminal steps
             assert np.array_equal(predicted, transition["grid"])
         grid = transition["grid"]
+    return model, state, grid
+
+
+def test_bfs_finds_and_reverified_click_plan_that_levels_up():
+    model, state, grid = _state_before_first_level_up()
 
     report = run_bfs(
         model,
@@ -92,3 +98,22 @@ def test_bfs_finds_and_reverified_click_plan_that_levels_up():
             planned.get("y"),
         )
     assert reached[report.goal]
+
+
+def test_discovered_bp35_click_target_finds_the_released_level_up():
+    model, state, grid = _state_before_first_level_up()
+
+    targets = discover_click_targets(grid)
+    assert [33, 33] in targets
+    report = run_bfs(
+        model,
+        state,
+        grid,
+        actions=(3, 4, 7),
+        click_targets=targets,
+        max_nodes=40,
+        max_depth=1,
+    )
+
+    assert report.found
+    assert report.plan == [{"action": 6, "x": 33, "y": 33}]

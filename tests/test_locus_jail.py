@@ -404,8 +404,12 @@ def test_locus_backtest_range_and_bfs_run_inside_model_worker(tmp_path):
     )
     with _service(tmp_path) as service:
         service.write_file("world_model_v1.py", source)
-        bfs = service.run_bfs("level_up", [[0, 0]], max_depth=1)
+        no_click_bfs = service.run_bfs("level_up", [], max_depth=1)
+        assert no_click_bfs.startswith("BFS: no goal within depth 1")
+        assert "+ 0 click(s)" in no_click_bfs
+        bfs = service.run_bfs("level_up", [[1, 1]], max_depth=1)
         assert bfs.startswith("BFS: goal in 1 step(s) via level_up")
+        assert "{'action': 6, 'x': 1, 'y': 1}" in bfs
         service.commit_actions([{"action": 3}], "create history")
 
     with LocusService(
@@ -443,7 +447,8 @@ def test_read_history_keeps_original_prefix_and_appends_grid_inspector(tmp_path)
         "#0 diff: shape=2x2; changed=4/4; bbox=[r0..1,c0..1]; regions=1\n"
         "  4@[r0..1,c0..1] from={0:4} to={1:4}\n"
         "    patch before=[[0,0],[0,0]] after=[[1,1],[1,1]]\n"
-        "value_pairs={0->1:4}"
+        "value_pairs={0->1:4}\n"
+        "Click targets (auto, 1; component-based, unverified): [[0,0]]"
     )
 
 
