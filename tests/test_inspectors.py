@@ -6,6 +6,7 @@ from schema_harness.inspectors import (
     describe_actor_affordances,
     describe_grid_diff,
     discover_click_targets,
+    pending_actor_affordance_hint,
 )
 
 
@@ -86,6 +87,46 @@ def test_actor_affordance_suppresses_no_runway_and_one_way_evidence():
     assert describe_actor_affordances(
         _affordance_frame(2),
         [(4, _affordance_frame(5))],
+    ) is None
+
+
+def test_pending_actor_affordance_requests_a_paired_observation():
+    expected = (
+        "Cross-transition inspector: one localized translation direction is observed "
+        "but unconfirmed. After a paired/opposite movement probe, call "
+        'read_history(detail="full") again to check for a novel structural context.'
+    )
+
+    assert pending_actor_affordance_hint(
+        _affordance_frame(2),
+        [(4, _affordance_frame(5))],
+    ) == expected
+    assert pending_actor_affordance_hint(
+        _affordance_frame(2),
+        [(4, _affordance_frame(5)), (4, _affordance_frame(8))],
+    ) == expected
+
+
+def test_pending_actor_affordance_stops_after_paired_or_ambiguous_evidence():
+    assert pending_actor_affordance_hint(
+        _affordance_frame(2),
+        [(4, _affordance_frame(5)), (3, _affordance_frame(2))],
+    ) is None
+    assert pending_actor_affordance_hint(
+        _affordance_frame(2),
+        [(6, _affordance_frame(2))],
+    ) is None
+
+    def duplicate_frame(left_col: int, right_col: int) -> list[list[int]]:
+        grid = np.full((16, 22), 9, dtype=int)
+        actor = np.array([[2, 3], [4, 5]])
+        grid[3:5, left_col:left_col + 2] = actor
+        grid[11:13, right_col:right_col + 2] = actor
+        return grid.tolist()
+
+    assert pending_actor_affordance_hint(
+        duplicate_frame(2, 14),
+        [(4, duplicate_frame(5, 11))],
     ) is None
 
 

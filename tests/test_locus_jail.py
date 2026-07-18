@@ -474,6 +474,45 @@ def test_read_history_omits_model_gate_once_a_model_is_installed(tmp_path):
     assert "Model gate:" not in output
 
 
+def test_read_history_appends_pending_cross_transition_hint(monkeypatch, tmp_path):
+    hint = "Cross-transition inspector: pending paired movement."
+    monkeypatch.setattr(
+        "schema_harness.locus.pending_actor_affordance_hint",
+        lambda _initial, _observations: hint,
+    )
+    with _service(tmp_path) as service:
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history()
+
+    assert hint in output
+
+
+def test_read_history_summary_remains_appendix_free(tmp_path):
+    with _service(tmp_path) as service:
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history(detail="summary")
+
+    assert output == (
+        "1 transitions total. Summary: level_ups=0 deaths=0 wins=0 "
+        "resets(action0)=0 clicks(action6)=0; by-action={3: 1}; "
+        "max_level=0; showing indices [0, 0] -> 1 steps."
+    )
+
+
 def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
     (tmp_path / "notes.md").write_text("ok\n", encoding="utf-8")
     repo = Path(__file__).resolve().parents[1]

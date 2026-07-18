@@ -378,32 +378,19 @@ def _anchors_text(anchors: Sequence[tuple[int, int]], *, limit: int = 6) -> str:
     return "[" + body + "]"
 
 
-def describe_actor_affordances(
+def _collect_translations(
     initial_grid: Sequence[Sequence[int]],
     observations: Sequence[tuple[int, Sequence[Sequence[int]]]],
-) -> str | None:
-    """Report a conservative novel context for an observed translated footprint.
-
-    This is advisory geometry, not a collision or dynamics model. It activates only
-    after matching translations in both directions, a deterministic action/vector
-    mapping, and an unchanged current footprint. Prospective anchors must exactly
-    match the repeatedly observed underlay.
-    """
-
+) -> tuple[np.ndarray, list[_Translation]]:
     initial = np.asarray(initial_grid, dtype=int)
     if initial.ndim != 2 or not initial.size:
         raise ValueError("affordance discovery requires a non-empty two-dimensional grid")
-    if not observations:
-        return None
 
     discrete_indices = [
         index
         for index, (action, _) in enumerate(observations)
         if action not in (0, 6)
-    ]
-    if len(discrete_indices) > 64:
-        discrete_indices = discrete_indices[-64:]
-
+    ][-64:]
     translations: list[_Translation] = []
     for index in discrete_indices:
         before = initial if index == 0 else np.asarray(observations[index - 1][1], dtype=int)
@@ -416,34 +403,117 @@ def describe_actor_affordances(
         )
         if observation is not None:
             translations.append(observation)
-    if len(translations) < 2:
-        return None
+    return initial, translations
 
-    all_vectors_by_action: dict[int, set[tuple[int, int]]] = {}
-    for item in translations:
-        all_vectors_by_action.setdefault(item.action, set()).add(item.vector)
 
-    groups: dict[
+def _translation_groups(
+    translations: Sequence[_Translation],
+) -> tuple[
+    dict[int, set[tuple[int, int]]],
+    list[list[_Translation]],
+]:
+    vectors_by_action: dict[int, set[tuple[int, int]]] = {}
+    keyed: dict[
         tuple[tuple[int, int], int, int, tuple[int, ...], tuple[tuple[int, int], ...]],
         list[_Translation],
     ] = {}
     for item in translations:
+        vectors_by_action.setdefault(item.action, set()).add(item.vector)
         axis = 0 if item.vector[0] else 1
-        step = abs(item.vector[axis])
         key = (
             item.footprint,
             axis,
-            step,
+            abs(item.vector[axis]),
             tuple(int(value) for value in item.underlay.flat),
             item.actor_counts,
         )
-        groups.setdefault(key, []).append(item)
+        keyed.setdefault(key, []).append(item)
+    groups = [sorted(group, key=lambda item: item.index) for group in keyed.values()]
+    return vectors_by_action, groups
+
+
+def _has_unique_current_appearance(
+    current: np.ndarray,
+    item: _Translation,
+) -> bool:
+    height, width = item.footprint
+    expected_row, expected_col = item.destination
+    if not (
+        current.ndim == 2
+        and 0 <= expected_row <= current.shape[0] - height
+        and 0 <= expected_col <= current.shape[1] - width
+    ):
+        return False
+    matches = [
+        (row, col)
+        for row in range(current.shape[0] - height + 1)
+        for col in range(current.shape[1] - width + 1)
+        if np.array_equal(
+            current[row:row + height, col:col + width],
+            item.appearance,
+        )
+    ]
+    return matches == [item.destination]
+
+
+def pending_actor_affordance_hint(
+    initial_grid: Sequence[Sequence[int]],
+    observations: Sequence[tuple[int, Sequence[Sequence[int]]]],
+) -> str | None:
+    """Prompt a later full-history read when only one movement direction is known."""
+
+    initial, translations = _collect_translations(initial_grid, observations)
+    if not translations or not observations:
+        return None
+    vectors_by_action, groups = _translation_groups(translations)
+    if len(groups) != 1:
+        return None
+    group = groups[0]
+    if not all(
+        left.destination == right.origin
+        for left, right in zip(group, group[1:])
+    ):
+        return None
+    axis = 0 if group[0].vector[0] else 1
+    signs = {item.vector[axis] // abs(item.vector[axis]) for item in group}
+    if len(signs) != 1:
+        return None
+    if any(len(vectors_by_action[item.action]) != 1 for item in group):
+        return None
+
+    latest = group[-1]
+    current = np.asarray(observations[-1][1], dtype=int)
+    if current.shape != initial.shape or not _has_unique_current_appearance(current, latest):
+        return None
+    return (
+        "Cross-transition inspector: one localized translation direction is observed "
+        "but unconfirmed. After a paired/opposite movement probe, call "
+        'read_history(detail="full") again to check for a novel structural context.'
+    )
+
+
+def describe_actor_affordances(
+    initial_grid: Sequence[Sequence[int]],
+    observations: Sequence[tuple[int, Sequence[Sequence[int]]]],
+) -> str | None:
+    """Report a conservative novel context for an observed translated footprint.
+
+    This is advisory geometry, not a collision or dynamics model. It activates only
+    after matching translations in both directions, a deterministic action/vector
+    mapping, and an unchanged current footprint. Prospective anchors must exactly
+    match the repeatedly observed underlay.
+    """
+
+    initial, translations = _collect_translations(initial_grid, observations)
+    if len(translations) < 2:
+        return None
+
+    all_vectors_by_action, groups = _translation_groups(translations)
 
     supported: list[list[_Translation]] = []
-    for group in groups.values():
+    for group in groups:
         if len(group) < 2:
             continue
-        group.sort(key=lambda item: item.index)
         pairs = list(zip(group, group[1:]))
         if not all(left.destination == right.origin for left, right in pairs):
             continue
@@ -483,27 +553,7 @@ def describe_actor_affordances(
     if current.shape != initial.shape:
         return None
     current_row, current_col = latest.destination
-    if not (
-        0 <= current_row <= current.shape[0] - height
-        and 0 <= current_col <= current.shape[1] - width
-    ):
-        return None
-    current_patch = current[
-        current_row:current_row + height,
-        current_col:current_col + width,
-    ]
-    if not np.array_equal(current_patch, latest.appearance):
-        return None
-    appearance_matches = [
-        (row, col)
-        for row in range(current.shape[0] - height + 1)
-        for col in range(current.shape[1] - width + 1)
-        if np.array_equal(
-            current[row:row + height, col:col + width],
-            latest.appearance,
-        )
-    ]
-    if appearance_matches != [latest.destination]:
+    if not _has_unique_current_appearance(current, latest):
         return None
 
     underlay = latest.underlay
@@ -753,4 +803,5 @@ __all__ = [
     "describe_actor_affordances",
     "describe_grid_diff",
     "discover_click_targets",
+    "pending_actor_affordance_hint",
 ]

@@ -45,6 +45,7 @@ from .inspectors import (
     describe_actor_affordances,
     describe_grid_diff,
     discover_click_targets,
+    pending_actor_affordance_hint,
 )
 from .model_loader import ModelInterface
 
@@ -861,12 +862,19 @@ class LocusService:
                 if item.action == 0 or item.level_up:
                     level_initial = item.grid
                     level_start = position + 1
-            topology = describe_actor_affordances(
-                level_initial,
-                [(item.action, item.grid) for item in timeline[level_start:]],
-            )
+            level_observations = [
+                (item.action, item.grid) for item in timeline[level_start:]
+            ]
+            topology = describe_actor_affordances(level_initial, level_observations)
             if topology is not None:
                 appendix += "\n" + topology
+            else:
+                pending_topology = pending_actor_affordance_hint(
+                    level_initial,
+                    level_observations,
+                )
+                if pending_topology is not None:
+                    appendix += "\n" + pending_topology
             if timeline and self.gateway.live_model_path() is None:
                 unit = "transition" if len(timeline) == 1 else "transitions"
                 appendix += (
