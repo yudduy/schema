@@ -93,6 +93,8 @@ V15's BP35 scripted smoke likewise produced one legal action and an 11-event sco
 
 The pre-registered `cd82-fb555c5d` measurement began from a proven-empty workdir with no other runner present. The gateway's expected offline-cache miss fell back to the official API, downloaded that exact public game version without source inspection, and initialized level 0. All three Claude invocations then returned the identical subscription-limit message with a 3:30pm PDT reset, so the no-progress guard stopped before any tool, action, or cost. The resulting stream has 14 contiguous events, an unchanged history-0 gateway at hash `824ef203…`, no turn ledger because nothing was committed, prompt source/snapshot/metadata hash `a9860a5c…`, harness tree `496abf46…`, and a clean anti-cheat audit. The vendored scorer rejects it with `no action_taken events found`, so this is a censored operational checkpoint rather than a 0% result or an M2 failure. Only the same workdir and session may resume after the provider reset; a fresh rerun cannot replace this first exposure.
 
+With no runner active, the official `arc-agi==0.9.9` NORMAL-mode acquisition path then prefetched the 21 remaining exact benchmark versions into the ignored local cache. `Arcade.make` internally instantiated and reset each environment, but no frame was rendered or inspected and no model or game action ran; the setup scorecard was closed. A final OFFLINE scan matched all 25 IDs in `vendor/baseline_actions.csv` exactly. This is provisioning evidence only, not a measured game exposure, and it leaves the committed harness tree unchanged.
+
 ## Bottleneck Diagnosis
 
 - The control and v1 often acted without an executable model.
