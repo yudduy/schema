@@ -1,5 +1,32 @@
 # Repository Guidelines
 
+## Multi-agent coordination — READ FIRST
+
+Two agents run in this **same working tree at once**, each with a different goal.
+Identify yourself by your active goal file, then stay inside that lane:
+
+- **METHOD agent** (`GOAL1.md`) — owns the agent's *reasoning*. Edit only
+  `schema_harness/prompts/**`, the system-prompt wiring in `runner.py`,
+  `docs/RESULTS-method.md`, and method-focused tests.
+- **TOOLING agent** (`GOAL2.md`) — owns the harness *machinery*. Edit only
+  `schema_harness/{backtest,bfs,model_loader,locus,gateway,inspectors,guard}.py`,
+  `spikes/driver_probe.py`, the runtime/session/budget wiring in `runner.py`,
+  `docs/RESULTS-tooling.md`, and tooling tests.
+
+Rules that keep the shared tree from corrupting (all mandatory):
+
+1. **Stay in your lane.** Never edit the other agent's files or its RESULTS ledger.
+   `docs/contract.md` is frozen — treat it as read-only.
+2. **Never `git add -A` / `git add .` / `git commit -a`.** The other agent has
+   uncommitted work in this tree; stage only your own files by explicit path.
+3. **`runner.py` is shared** — edit only your own section, keep it small, and commit
+   it immediately so the other agent rebuilds on your version.
+4. **Commit small and often**, green tests first (`uv run pytest -q`), tagging your
+   direction in the Conventional-Commit scope: `feat(method): …` / `fix(tooling): …`.
+5. **One live subscription run at a time.** Another Opus pilot may already be running;
+   never launch an overlapping live game run — record your live runs in your ledger
+   and check the other ledger before starting one.
+
 ## Project Structure & Module Organization
 
 `schema_harness/` contains harness code: event logging, runner orchestration, model loading, gateway isolation, replay verification, backtesting, and BFS support. Root entry points are `play.py`, a short interactive smoke test, and `agent.py`, a minimal random agent. Tests live in `tests/` and mirror harness modules with `test_<behavior>.py` names. Protocol and contract details belong in `docs/`; exploratory validation scripts belong in `spikes/`. Treat `vendor/` traces, models, and scoring utilities as reference fixtures. `environment_files/` and `recordings/` are generated and ignored by Git.
