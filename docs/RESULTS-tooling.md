@@ -4,7 +4,7 @@ Status: active on `goal2`. No clean-game milestone is claimed yet.
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **62 passed**.
+- `uv run pytest -q`: **68 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
@@ -57,6 +57,14 @@ An exploratory continuation preserved the matched five-turn prefix and an eight-
 
 The next search change replaces node-major BFS expansion with candidate-major, depth-layered traversal. A synthetic 32-click case where the old scheduler spent a 36-call budget on the first parent and found no goal now reaches the second parent and returns a depth-2 plan on call 36. Tests lock full parent×candidate coverage, caller candidate priority, root-only RESET, exact node accounting, and goal-before-dedup. The released model also exposed the ceiling: 32-target depth-4 search took **42.79s** without a goal, and a seven-target depth-12 diagnostic exceeded **60s** and was stopped. Fairer allocation helps partial layers; useful deeper planning still needs cheaper state expansion or subgoals.
 
+## Structural-context iteration
+
+The extended model-gate run learned click effects and reached **12/12** replay, yet spent eight clicks on a false clear-all goal and did not sweep the mobile footprint into the board's unique orthogonal opening. A graph-exploration replay would not have prevented this: every normalized state-action pair was new. A click-effect ledger would summarize the repeated manipulation but would not identify the untested context. The selected change therefore appends a bounded, advisory translated-footprint topology report to full history; prompts, tool schemas, execution, and BFS semantics remain unchanged.
+
+The report activates only after a unique localized footprint makes a reversible translation chain, each action has one globally consistent vector, and the exact current appearance is unique. It erodes the observed underlay by the full footprint, checks swept occupancy between step anchors, and reports only an unvisited anchor whose orthogonal clearance exceeds every observed anchor. Current-level evidence is scoped after the latest RESET or level boundary and the latest 64 discrete observations bound runtime. Negative tests cover one-way evidence, no novel runway, duplicate movers, same-histogram movers, globally inconsistent action vectors, and the bounded-window seam.
+
+On a fresh contaminated bp35 replay, the suffix appeared after actions `3,4`, before any click: `footprint=5x5`, `step=6 columns`, and `action 4 ×4` from `(row=37,col=19)` to `(row=37,col=43)`, where three upward anchors were open versus zero at observed anchors. The preserved five-turn prefix produced the corresponding `action 4 ×5` route from column 13. This proves timely offline visibility, not agent use or score gain. A matched live Opus trial is pending the shared subscription-run slot.
+
 ## Validity hardening in this iteration
 
 - `run_python`, `run_shell`, model installation, backtesting, BFS, and commit-time prediction now execute behind a deny-by-default macOS process boundary.
@@ -65,7 +73,7 @@ The next search change replaces node-major BFS expansion with candidate-major, d
 - `run_backtest(start=...)` again emits the required `[range #a..#b]` prefix; all 14 public tool schemas remain unchanged.
 - Structured driver errors now stop after one turn, close with `run_finished`, and return nonzero instead of consuming the no-progress allowance. This was added after the second zero-token provider failure; its focused integration test and structured review are clean.
 - Live runners now acquire a nonblocking, per-user `flock` shared across worktrees. Overlap fails before environment initialization, and the lock releases on normal or exceptional exit. This mechanizes the repository's one-subscription-run rule; older already-running branches still require manual coordination.
-- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), and live-run serialization **clean** (0.86).
+- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), live-run serialization **clean** (0.86), and translated-footprint topology **clean** (0.82 after one accepted bounded-window fix).
 
 ## Clean-evaluation ledger
 
