@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -19,6 +20,26 @@ V14_PROMPT = (
 )
 V15_PROMPT = (
     REPO_ROOT / "schema_harness" / "prompts" / "physicist_v15_reachability_certificate.md"
+)
+V16_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v16_private_boundary.md"
+)
+V16_BOUNDARY = (
+    "Use a strict evidence allowlist. You may inspect `runtime/gateway_state.json`, "
+    "`runtime/artifact`, `framework/contract.md`, `framework/backtest.py`, "
+    "`framework/bfs.py`, `framework/model_loader.py`, `framework/events.py`, `notes.md`, "
+    "`world_model_v<N>.py`, files you create under `model_scratch/`, and certificate files "
+    "produced by the installed model under `runtime/model_scratch/`. "
+    "Write directly only to `notes.md`, `world_model_v<N>.py`, and `model_scratch/`; only "
+    "the installed model may write certificate output under `runtime/model_scratch/` while "
+    "`run_backtest` executes it. Never list, probe, read, grep, copy, link, open, or infer "
+    "any other workspace path, whether through file tools, Python, shell, aliases, or broad "
+    "directory inventories, even if a path is visible or access seems possible. Use targeted "
+    "`read_history(indices=[...], detail=\"full\")` for "
+    "every historical observation. Treat a denial or absent match as an interface boundary, "
+    "not an invitation to try another path. If the allowlisted state plus targeted history is "
+    "insufficient, preserve the uncertainty and commit one action rather than substitute "
+    "another data source."
 )
 
 
@@ -287,4 +308,99 @@ def test_v15_requires_complete_reachability_evidence_before_impossibility():
         assert inherited_v14_rule in prompt
 
     for overfit_fragment in ("r11l", "cargo", "centroid", "socket", "(38,57)"):
+        assert overfit_fragment not in prompt.lower()
+
+
+def test_v16_uses_only_the_documented_evidence_interface():
+    prompt = V16_PROMPT.read_text(encoding="utf-8")
+    inherited = V15_PROMPT.read_text(encoding="utf-8")
+
+    old_title = "# Physicist Method v15 — Reachability, Renderer Precedence, and Rollout Certificates"
+    new_title = "# Physicist Method v16 — Private Boundaries, Reachability, and Rollout Certificates"
+    insertion_anchor = (
+        "3. **Observation renderer and initialization:** camera, counters, static geometry, "
+        "and reconstruction from the supplied grid.\n\n"
+    )
+    assert inherited.count(old_title) == 1
+    assert inherited.count(insertion_anchor) == 1
+    expected = inherited.replace(old_title, new_title, 1)
+    expected = expected.replace(insertion_anchor, insertion_anchor + V16_BOUNDARY + "\n\n", 1)
+    # This exact derivation rejects unquoted paths and protects every inherited v15 rule.
+    assert prompt == expected
+
+    for allowed_interface in (
+        "`runtime/gateway_state.json`",
+        "`runtime/artifact`",
+        "`framework/contract.md`",
+        "`framework/backtest.py`",
+        "`framework/bfs.py`",
+        "`framework/model_loader.py`",
+        "`framework/events.py`",
+        "`notes.md`",
+        "`world_model_v<N>.py`",
+        "files you create under `model_scratch/`",
+        '`read_history(indices=[...], detail="full")` for every historical observation',
+    ):
+        assert allowed_interface in prompt
+
+    for boundary_rule in (
+        "Use a strict evidence allowlist",
+        "Never list, probe, read, grep, copy, link, open, or infer any other workspace path",
+        "whether through file tools, Python, shell, aliases, or broad directory inventories",
+        "Treat a denial or absent match as an interface boundary",
+        "preserve the uncertainty and commit one action rather than substitute another data source",
+    ):
+        assert boundary_rule in prompt
+
+    assert "only the installed model may write certificate output" in prompt
+    assert "`runtime/model_scratch/`" in prompt
+    assert "`model_scratch/`" in prompt
+    backticked = set(re.findall(r"`([^`]+)`", prompt))
+    path_references = {
+        value
+        for value in backticked
+        if "/" in value or value.endswith((".json", ".md", ".py"))
+    }
+    assert path_references == {
+        "framework/backtest.py",
+        "framework/bfs.py",
+        "framework/contract.md",
+        "framework/events.py",
+        "framework/model_loader.py",
+        "model_scratch/",
+        "notes.md",
+        "runtime/artifact",
+        "runtime/gateway_state.json",
+        "runtime/model_scratch/",
+        "world_model_v<N>.py",
+    }
+    for private_artifact in (
+        "events.jsonl",
+        "run.json",
+        "mcp.json",
+        "gateway_timeline.jsonl",
+        "turn_ledger.json",
+        "live_model.json",
+        "locus.jsonl",
+        "environment_files",
+        "recordings/",
+        "sessions/",
+    ):
+        assert private_artifact not in prompt
+
+    for inherited_v15_rule in (
+        "produce an executable reachability certificate",
+        "label global reachability `UNKNOWN`",
+        "produce an executable renderer-provenance certificate",
+        "produce an executable initialization certificate through two independent paths",
+        "require an executable certificate for the exact suffix",
+        "check_applicability(state, grid, action, x, y)",
+        "Every non-final batched action requires version-space agreement",
+        "batch only an exact plan returned by gateway-aligned `run_bfs`",
+        "inspect `level_up`, `dead`, and `win`",
+        "Treat the game identifier as opaque",
+    ):
+        assert inherited_v15_rule in prompt
+
+    for overfit_fragment in ("bp35", "r11l", "cargo", "centroid", "socket"):
         assert overfit_fragment not in prompt.lower()
