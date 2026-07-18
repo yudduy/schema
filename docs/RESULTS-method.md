@@ -202,6 +202,12 @@ ONLY_RESET_LEVELS=true uv run python -m schema_harness.runner \
 
 Both passes are required for M3. Scoring will stage the two distinct trajectories once each under the vendored scorer, never duplicate one run across dataset trees. The later 25-game sweep retains the stronger approximately 99% aggregate replication target; that aggregate target is not substituted for this per-game generalization gate.
 
+## Pre-registered M4 Replication
+
+The published 98.98% Claude result is not a Fable-only sweep. It uses a fixed fallback rule: run Opus 4.8 Max first, rerun games scoring below 80 RHAE with Fable 5 Max, and retain the higher per-game score; the released aggregate retains 14 Opus and 11 Fable runs ([Schema, Figure 6 and pairing ledger](https://schema-harness.github.io/)). M4 will reproduce that selection rule with the same frozen v15 prompt and harness tree. Model routing will not use released per-game winners or trajectories. The two Fable M3 runs may count as fallback candidates only when the independently run Opus result triggers the pre-registered threshold.
+
+The 25 canonical IDs will run serially in `vendor/baseline_actions.csv` order, each model in a separate fresh workdir with no cross-run notes, session, model, or scratch files. Every invocation uses the M3 command's timeout, action limit, caps, no-progress limit, and rollover threshold; provider-censored or capped runs resume only their original workdir. Each retained run must pass the same sequence, gateway, ledger, prompt, harness-tree, scorer, and guard audits. The target is 25 wins, 183/183 levels, and mean RHAE at least the published 98.98%. The official result and any reproduction remain self-reported Public-set evidence, not ARC Prize verification or a Semi-private generalization claim.
+
 ## Status and Uncertainty
 
 M0 and M1 are proven. The contaminated development gate passes, and frozen v9 cleared the first five initially untouched r11l levels in `10/14/11/15/20` actions while restoring exact retrospective replay before every winning suffix. M2 is not yet satisfied: the level-5 continuation stopped at 72 total actions and is diagnostic because a solution-derived scratch artifact leaked before Turn 30. V15 is the current frozen candidate; its first cd82 invocation was censored by the provider quota before an action, so it still has no live performance result. It must clear both pre-registered games unchanged before any M3 generalization claim. Only then should the same frozen method enter the full sweep and any ~99% reproduction comparison.
