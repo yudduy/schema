@@ -17,6 +17,9 @@ V13_PROMPT = (
 V14_PROMPT = (
     REPO_ROOT / "schema_harness" / "prompts" / "physicist_v14_renderer_precedence.md"
 )
+V15_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v15_reachability_certificate.md"
+)
 
 
 def test_v10_grounds_actual_and_predicted_frames_without_losing_v8_seeding():
@@ -244,3 +247,44 @@ def test_v14_certifies_contextual_renderer_precedence_before_batching():
 
     for overfit_fragment in ("r11l", "(57,55)", "socket arm"):
         assert overfit_fragment not in prompt
+
+
+def test_v15_requires_complete_reachability_evidence_before_impossibility():
+    prompt = V15_PROMPT.read_text(encoding="utf-8")
+
+    for reachability_gate in (
+        "search failure as evidence only about the searched successor generator",
+        "never by itself about the game's mechanics",
+        "produce an executable reachability certificate",
+        "over-approximate every legal primitive action that could change future reachability",
+        "arbitrary safe staging and repositioning targets",
+        "temporarily neutral or regressive moves",
+        "not only actions that immediately contact an object, satisfy a subgoal, or reduce goal distance",
+        "mechanically checked plan-preservation witness",
+        "same canonical transition-relevant state at no greater real-action cost",
+        "all necessary enablers and interfering actions remain represented",
+        "complete action classes and coordinate domain searched",
+        "independently verify every coverage or dominance witness",
+        "restricted, bounded, timed-out, or target-directed search",
+        "label global reachability `UNKNOWN`",
+        "do not promote a missing-mechanic hypothesis",
+        "constructive staged witness",
+        "solving inverse transition constraints or expanding safe intermediate states",
+        "proved lower bound separate from an executable upper-bound witness",
+        "sound certificate closed under every applicable action",
+    ):
+        assert reachability_gate in prompt
+
+    for inherited_v14_rule in (
+        "evidence-backed, possibly conditional renderer rule",
+        '`check_renderer_precedence(state, grid, action, x, y) -> {"contenders": ..., "winner": ..., "support": ..., "unknown_precedence": ...}`',
+        "produce an executable renderer-provenance certificate",
+        "Model action applicability or preconditions separately from conditional effects",
+        "Every non-final batched action requires version-space agreement",
+        "produce an executable initialization certificate through two independent paths",
+        "require an executable certificate for the exact suffix",
+    ):
+        assert inherited_v14_rule in prompt
+
+    for overfit_fragment in ("r11l", "cargo", "centroid", "socket", "(38,57)"):
+        assert overfit_fragment not in prompt.lower()
