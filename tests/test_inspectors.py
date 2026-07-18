@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from schema_harness.inspectors import describe_grid_diff, discover_click_targets
+from schema_harness.inspectors import (
+    describe_actor_affordances,
+    describe_grid_diff,
+    discover_click_targets,
+)
+
+
+def _affordance_frame(actor_col: int, *, runway: bool = True) -> list[list[int]]:
+    grid = np.full((16, 22), 8, dtype=int)
+    grid[8:10, 2:13] = 9
+    if runway:
+        grid[2:10, 11:13] = 9
+    grid[8:10, actor_col:actor_col + 2] = np.array([[2, 3], [4, 5]])
+    return grid.tolist()
 
 
 def test_click_targets_use_an_actual_irregular_component_cell_and_xy_order():
@@ -43,6 +56,108 @@ def test_click_targets_rank_compact_objects_before_large_fields():
 
     assert targets[0] == [3, 2]
     assert targets[-1] == [8, 8]
+
+
+def test_actor_affordance_finds_novel_full_footprint_runway():
+    output = describe_actor_affordances(
+        _affordance_frame(2),
+        [(4, _affordance_frame(5)), (3, _affordance_frame(2))],
+    )
+
+    assert output == (
+        "Translated-footprint topology (heuristic; current level):\n"
+        "  evidence=2 translated moves; footprint=2x2; step=3 columns; "
+        "current anchor=(row=8,col=2)\n"
+        "  novel extrapolated context via observed moves: action 4 ×3 -> "
+        "anchor=(row=8,col=11)\n"
+        "  upward clearance there=2 step(s) (observed anchors max=0); "
+        "anchors=[(row=5,col=11),(row=2,col=11)]"
+    )
+
+
+def test_actor_affordance_suppresses_no_runway_and_one_way_evidence():
+    assert describe_actor_affordances(
+        _affordance_frame(2, runway=False),
+        [
+            (4, _affordance_frame(5, runway=False)),
+            (3, _affordance_frame(2, runway=False)),
+        ],
+    ) is None
+    assert describe_actor_affordances(
+        _affordance_frame(2),
+        [(4, _affordance_frame(5))],
+    ) is None
+
+
+def test_actor_affordance_rejects_ambiguous_duplicate_movers():
+    def duplicate_frame(left_col: int, right_col: int) -> list[list[int]]:
+        grid = np.full((16, 22), 9, dtype=int)
+        actor = np.array([[2, 3], [4, 5]])
+        grid[3:5, left_col:left_col + 2] = actor
+        grid[11:13, right_col:right_col + 2] = actor
+        return grid.tolist()
+
+    assert describe_actor_affordances(
+        duplicate_frame(2, 14),
+        [
+            (4, duplicate_frame(5, 11)),
+            (3, duplicate_frame(2, 14)),
+        ],
+    ) is None
+
+
+def test_actor_affordance_rejects_globally_inconsistent_action_vectors():
+    def two_actor_frame(actor_col: int, second_row: int) -> list[list[int]]:
+        grid = np.asarray(_affordance_frame(actor_col))
+        grid[second_row:second_row + 2, 18:20] = np.array([[6, 7], [7, 6]])
+        return grid.tolist()
+
+    assert describe_actor_affordances(
+        two_actor_frame(2, 2),
+        [
+            (4, two_actor_frame(5, 2)),
+            (3, two_actor_frame(2, 2)),
+            (4, two_actor_frame(2, 5)),
+        ],
+    ) is None
+
+
+def test_actor_affordance_does_not_merge_same_histogram_movers():
+    first = np.array([[2, 3], [4, 5]])
+    second = np.array([[2, 4], [3, 5]])
+
+    def two_mover_frame(first_col: int, second_col: int) -> list[list[int]]:
+        grid = np.full((16, 22), 8, dtype=int)
+        grid[8:10, 2:13] = 9
+        grid[2:10, 11:13] = 9
+        grid[12:14, 14:19] = 9
+        grid[12:14, first_col:first_col + 2] = first
+        grid[8:10, second_col:second_col + 2] = second
+        return grid.tolist()
+
+    assert describe_actor_affordances(
+        two_mover_frame(14, 5),
+        [
+            (4, two_mover_frame(17, 5)),
+            (3, two_mover_frame(17, 2)),
+        ],
+    ) is None
+
+
+def test_actor_affordance_keeps_a_contiguous_bounded_movement_window():
+    observations = [
+        (
+            4 if index % 2 == 0 else 3,
+            _affordance_frame(5 if index % 2 == 0 else 2),
+        )
+        for index in range(65)
+    ]
+
+    output = describe_actor_affordances(_affordance_frame(2), observations)
+
+    assert output is not None
+    assert "evidence=64 translated moves" in output
+    assert "action 4 ×2 -> anchor=(row=8,col=11)" in output
 
 
 def test_grid_diff_describes_disconnected_motion_and_status_change():

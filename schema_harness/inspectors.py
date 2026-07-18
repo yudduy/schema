@@ -4,12 +4,27 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TypeAlias
 
 import numpy as np
 
 
 CellValue: TypeAlias = int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Translation:
+    index: int
+    action: int
+    origin: tuple[int, int]
+    destination: tuple[int, int]
+    vector: tuple[int, int]
+    footprint: tuple[int, int]
+    underlay: np.ndarray
+    appearance: np.ndarray
+    actor_counts: tuple[tuple[int, int], ...]
+    changed_cells: int
 
 
 def _value_text(value: CellValue) -> str:
@@ -209,6 +224,423 @@ def discover_click_targets(
     return targets
 
 
+def _changed_regions(
+    mask: np.ndarray,
+    *,
+    max_regions: int,
+) -> list[list[tuple[int, int]]]:
+    remaining = {
+        (int(row), int(col))
+        for row, col in np.argwhere(mask)
+    }
+    regions: list[list[tuple[int, int]]] = []
+    while remaining:
+        if len(regions) == max_regions:
+            return []
+        start = min(remaining)
+        remaining.remove(start)
+        queue = deque([start])
+        region: list[tuple[int, int]] = []
+        while queue:
+            row, col = queue.popleft()
+            region.append((row, col))
+            for neighbor in (
+                (row - 1, col),
+                (row, col - 1),
+                (row, col + 1),
+                (row + 1, col),
+            ):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    queue.append(neighbor)
+        regions.append(sorted(region))
+    return regions
+
+
+def _region_bounds(
+    region: Sequence[tuple[int, int]],
+) -> tuple[int, int, int, int]:
+    rows = [row for row, _ in region]
+    cols = [col for _, col in region]
+    return min(rows), min(cols), max(rows) + 1, max(cols) + 1
+
+
+def _int_counts(array: np.ndarray) -> tuple[tuple[int, int], ...]:
+    return tuple(sorted(Counter(int(value) for value in array.flat).items()))
+
+
+def _translation_observation(
+    before: np.ndarray,
+    after: np.ndarray,
+    *,
+    index: int,
+    action: int,
+) -> _Translation | None:
+    if before.shape != after.shape or before.ndim != 2:
+        return None
+    changed = before != after
+    changed_count = int(np.count_nonzero(changed))
+    if changed_count < 4 or changed_count > before.size // 2:
+        return None
+    regions = _changed_regions(changed, max_regions=24)
+    if len(regions) < 2:
+        return None
+
+    value_counts = Counter(int(value) for value in before.flat)
+    candidates: list[_Translation] = []
+    for source_index, source in enumerate(regions):
+        if len(source) < 2:
+            continue
+        source_bounds = _region_bounds(source)
+        source_row, source_col, source_bottom, source_right = source_bounds
+        footprint = (source_bottom - source_row, source_right - source_col)
+        source_before = before[source_row:source_bottom, source_col:source_right]
+        source_after = after[source_row:source_bottom, source_col:source_right]
+        for destination_index, destination in enumerate(regions):
+            if source_index == destination_index or len(source) != len(destination):
+                continue
+            destination_bounds = _region_bounds(destination)
+            destination_row, destination_col, destination_bottom, destination_right = (
+                destination_bounds
+            )
+            if footprint != (
+                destination_bottom - destination_row,
+                destination_right - destination_col,
+            ):
+                continue
+            vector = (
+                destination_row - source_row,
+                destination_col - source_col,
+            )
+            if (vector[0] == 0) == (vector[1] == 0):
+                continue
+            if vector[0] == 0 and abs(vector[1]) < footprint[1]:
+                continue
+            if vector[1] == 0 and abs(vector[0]) < footprint[0]:
+                continue
+
+            destination_before = before[
+                destination_row:destination_bottom,
+                destination_col:destination_right,
+            ]
+            destination_after = after[
+                destination_row:destination_bottom,
+                destination_col:destination_right,
+            ]
+            if not np.array_equal(source_after, destination_before):
+                continue
+            if _int_counts(source_before) != _int_counts(destination_after):
+                continue
+            if not np.array_equal(
+                source_before != source_after,
+                destination_before != destination_after,
+            ):
+                continue
+
+            underlay_prevalence = sum(
+                value_counts[int(value)] for value in source_after.flat
+            )
+            actor_prevalence = sum(
+                value_counts[int(value)] for value in source_before.flat
+            )
+            if underlay_prevalence <= actor_prevalence:
+                continue
+            candidates.append(
+                _Translation(
+                    index=index,
+                    action=action,
+                    origin=(source_row, source_col),
+                    destination=(destination_row, destination_col),
+                    vector=vector,
+                    footprint=footprint,
+                    underlay=source_after.copy(),
+                    appearance=destination_after.copy(),
+                    actor_counts=_int_counts(source_before),
+                    changed_cells=len(source) + len(destination),
+                )
+            )
+
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
+def _route_text(actions: Sequence[int]) -> str:
+    return f"action {actions[0]} ×{len(actions)}"
+
+
+def _anchors_text(anchors: Sequence[tuple[int, int]], *, limit: int = 6) -> str:
+    body = ",".join(
+        f"(row={row},col={col})" for row, col in anchors[:limit]
+    )
+    if len(anchors) > limit:
+        body += f",…+{len(anchors) - limit}"
+    return "[" + body + "]"
+
+
+def describe_actor_affordances(
+    initial_grid: Sequence[Sequence[int]],
+    observations: Sequence[tuple[int, Sequence[Sequence[int]]]],
+) -> str | None:
+    """Report a conservative novel context for an observed translated footprint.
+
+    This is advisory geometry, not a collision or dynamics model. It activates only
+    after matching translations in both directions, a deterministic action/vector
+    mapping, and an unchanged current footprint. Prospective anchors must exactly
+    match the repeatedly observed underlay.
+    """
+
+    initial = np.asarray(initial_grid, dtype=int)
+    if initial.ndim != 2 or not initial.size:
+        raise ValueError("affordance discovery requires a non-empty two-dimensional grid")
+    if not observations:
+        return None
+
+    discrete_indices = [
+        index
+        for index, (action, _) in enumerate(observations)
+        if action not in (0, 6)
+    ]
+    if len(discrete_indices) > 64:
+        discrete_indices = discrete_indices[-64:]
+
+    translations: list[_Translation] = []
+    for index in discrete_indices:
+        before = initial if index == 0 else np.asarray(observations[index - 1][1], dtype=int)
+        after = np.asarray(observations[index][1], dtype=int)
+        observation = _translation_observation(
+            before,
+            after,
+            index=index,
+            action=observations[index][0],
+        )
+        if observation is not None:
+            translations.append(observation)
+    if len(translations) < 2:
+        return None
+
+    all_vectors_by_action: dict[int, set[tuple[int, int]]] = {}
+    for item in translations:
+        all_vectors_by_action.setdefault(item.action, set()).add(item.vector)
+
+    groups: dict[
+        tuple[tuple[int, int], int, int, tuple[int, ...], tuple[tuple[int, int], ...]],
+        list[_Translation],
+    ] = {}
+    for item in translations:
+        axis = 0 if item.vector[0] else 1
+        step = abs(item.vector[axis])
+        key = (
+            item.footprint,
+            axis,
+            step,
+            tuple(int(value) for value in item.underlay.flat),
+            item.actor_counts,
+        )
+        groups.setdefault(key, []).append(item)
+
+    supported: list[list[_Translation]] = []
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda item: item.index)
+        pairs = list(zip(group, group[1:]))
+        if not all(left.destination == right.origin for left, right in pairs):
+            continue
+        if not any(
+            left.origin == right.destination and left.destination == right.origin
+            for left, right in pairs
+        ):
+            continue
+        axis = 0 if group[0].vector[0] else 1
+        signs = {item.vector[axis] // abs(item.vector[axis]) for item in group}
+        if signs != {-1, 1}:
+            continue
+        vectors_by_action: dict[int, set[tuple[int, int]]] = {}
+        for item in group:
+            vectors_by_action.setdefault(item.action, set()).add(item.vector)
+        if any(
+            len(vectors) != 1 or len(all_vectors_by_action[action]) != 1
+            for action, vectors in vectors_by_action.items()
+        ):
+            continue
+        supported.append(group)
+    if not supported:
+        return None
+
+    group = min(
+        supported,
+        key=lambda items: (
+            -len(items),
+            -sum(item.changed_cells for item in items),
+            items[0].footprint,
+            items[0].origin,
+        ),
+    )
+    latest = max(group, key=lambda item: item.index)
+    height, width = latest.footprint
+    current = np.asarray(observations[-1][1], dtype=int)
+    if current.shape != initial.shape:
+        return None
+    current_row, current_col = latest.destination
+    if not (
+        0 <= current_row <= current.shape[0] - height
+        and 0 <= current_col <= current.shape[1] - width
+    ):
+        return None
+    current_patch = current[
+        current_row:current_row + height,
+        current_col:current_col + width,
+    ]
+    if not np.array_equal(current_patch, latest.appearance):
+        return None
+    appearance_matches = [
+        (row, col)
+        for row in range(current.shape[0] - height + 1)
+        for col in range(current.shape[1] - width + 1)
+        if np.array_equal(
+            current[row:row + height, col:col + width],
+            latest.appearance,
+        )
+    ]
+    if appearance_matches != [latest.destination]:
+        return None
+
+    underlay = latest.underlay
+    base = current.copy()
+    base[
+        current_row:current_row + height,
+        current_col:current_col + width,
+    ] = underlay
+
+    def valid_anchor(anchor: tuple[int, int]) -> bool:
+        row, col = anchor
+        return (
+            0 <= row <= base.shape[0] - height
+            and 0 <= col <= base.shape[1] - width
+            and np.array_equal(base[row:row + height, col:col + width], underlay)
+        )
+
+    def valid_motion(
+        anchor: tuple[int, int],
+        vector: tuple[int, int],
+    ) -> bool:
+        distance = abs(vector[0] or vector[1])
+        row_sign = 0 if vector[0] == 0 else vector[0] // abs(vector[0])
+        col_sign = 0 if vector[1] == 0 else vector[1] // abs(vector[1])
+        return all(
+            valid_anchor((anchor[0] + row_sign * offset, anchor[1] + col_sign * offset))
+            for offset in range(1, distance + 1)
+        )
+
+    action_counts = Counter((item.action, item.vector) for item in group)
+    actions_by_vector: dict[tuple[int, int], list[int]] = {}
+    for item in group:
+        actions_by_vector.setdefault(item.vector, []).append(item.action)
+    vector_actions = {
+        vector: min(
+            set(actions),
+            key=lambda action: (-action_counts[(action, vector)], action),
+        )
+        for vector, actions in actions_by_vector.items()
+    }
+
+    # The supported vectors are opposite fixed-size steps on one axis, so their
+    # configuration-space graph is a line rather than a general BFS frontier.
+    routes: dict[tuple[int, int], tuple[int, ...]] = {latest.destination: ()}
+    for vector, action in sorted(vector_actions.items()):
+        anchor = latest.destination
+        for distance in range(1, 13):
+            if not valid_motion(anchor, vector):
+                break
+            anchor = (anchor[0] + vector[0], anchor[1] + vector[1])
+            routes[anchor] = (action,) * distance
+
+    axis = 0 if latest.vector[0] else 1
+    step = abs(latest.vector[axis])
+    if axis == 1:
+        orthogonal = ((-step, 0, "upward"), (step, 0, "downward"))
+        axis_name = "columns"
+    else:
+        orthogonal = ((0, -step, "leftward"), (0, step, "rightward"))
+        axis_name = "rows"
+
+    def clearance(
+        anchor: tuple[int, int],
+        vector: tuple[int, int],
+    ) -> list[tuple[int, int]]:
+        result: list[tuple[int, int]] = []
+        candidate = (anchor[0] + vector[0], anchor[1] + vector[1])
+        previous = anchor
+        while len(result) < 16 and valid_motion(previous, vector):
+            result.append(candidate)
+            previous = candidate
+            candidate = (candidate[0] + vector[0], candidate[1] + vector[1])
+        return result
+
+    observed_anchors = {
+        anchor
+        for item in group
+        for anchor in (item.origin, item.destination)
+        if valid_anchor(anchor)
+    }
+    observed_maxima = [
+        max(
+            (len(clearance(anchor, (row_step, col_step))) for anchor in observed_anchors),
+            default=0,
+        )
+        for row_step, col_step, _ in orthogonal
+    ]
+
+    candidates: list[
+        tuple[
+            int,
+            int,
+            int,
+            tuple[int, int],
+            int,
+            tuple[int, ...],
+            list[tuple[int, int]],
+        ]
+    ] = []
+    for anchor, plan in routes.items():
+        if anchor in observed_anchors:
+            continue
+        for direction_index, (row_step, col_step, _) in enumerate(orthogonal):
+            ray = clearance(anchor, (row_step, col_step))
+            gain = len(ray) - observed_maxima[direction_index]
+            if gain <= 0:
+                continue
+            candidates.append(
+                (
+                    -gain,
+                    -len(ray),
+                    len(plan),
+                    anchor,
+                    direction_index,
+                    plan,
+                    ray,
+                )
+            )
+    if not candidates:
+        return None
+
+    _, _, _, anchor, direction_index, plan, ray = min(candidates)
+    direction = orthogonal[direction_index][2]
+    observed_maximum = observed_maxima[direction_index]
+    return "\n".join(
+        (
+            "Translated-footprint topology (heuristic; current level):",
+            f"  evidence={len(group)} translated moves; footprint={height}x{width}; "
+            f"step={step} {axis_name}; current anchor=(row={current_row},col={current_col})",
+            f"  novel extrapolated context via observed moves: {_route_text(plan)} -> "
+            f"anchor=(row={anchor[0]},col={anchor[1]})",
+            f"  {direction} clearance there={len(ray)} step(s) "
+            f"(observed anchors max={observed_maximum}); anchors={_anchors_text(ray)}",
+        )
+    )
+
+
 def describe_grid_diff(
     before: Sequence[Sequence[int]],
     after: Sequence[Sequence[int]],
@@ -317,4 +749,8 @@ def describe_grid_diff(
     return "\n".join(lines)
 
 
-__all__ = ["describe_grid_diff", "discover_click_targets"]
+__all__ = [
+    "describe_actor_affordances",
+    "describe_grid_diff",
+    "discover_click_targets",
+]

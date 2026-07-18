@@ -41,7 +41,11 @@ from .gateway import (
     Transition,
     WorldModelPrediction,
 )
-from .inspectors import describe_grid_diff, discover_click_targets
+from .inspectors import (
+    describe_actor_affordances,
+    describe_grid_diff,
+    discover_click_targets,
+)
 from .model_loader import ModelInterface
 
 
@@ -851,6 +855,18 @@ class LocusService:
             )
             if inspector_records:
                 appendix += "\n" + "\n".join(inspector_records)
+            level_initial = initial
+            level_start = 0
+            for position, item in enumerate(timeline):
+                if item.action == 0 or item.level_up:
+                    level_initial = item.grid
+                    level_start = position + 1
+            topology = describe_actor_affordances(
+                level_initial,
+                [(item.action, item.grid) for item in timeline[level_start:]],
+            )
+            if topology is not None:
+                appendix += "\n" + topology
             if timeline and self.gateway.live_model_path() is None:
                 unit = "transition" if len(timeline) == 1 else "transitions"
                 appendix += (
