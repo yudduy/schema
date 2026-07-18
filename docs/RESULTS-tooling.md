@@ -4,7 +4,7 @@ Status: active on `goal2`. No clean-game milestone is claimed yet.
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **61 passed**.
+- `uv run pytest -q`: **62 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
@@ -45,7 +45,7 @@ On the released bp35 simulator, the set contained all seven interactive pop-tile
 
 The matched live agent read the proposals on turn 2 and copied all seven object centers into `notes.md`, proving the hint was usable. It nevertheless spent all five turns on one-step control probes (`click player`, then actions `3/4/7/7`), never installed a world model, never backtested or called BFS, and never clicked a proposed target. Visibility alone therefore did not fix the binding experiment-sequencing/model-formation bottleneck.
 
-The extended-horizon run did not make the fair scheduler observable. The agent spent eight turns probing, installed its first model on turn 9, and obtained an 8/8 green backtest. Its first queued click under that model immediately mispredicted, so the executor halted the remaining plan; BFS was never called. Turn 9 alone cost $1.6287 and raised the total to $4.2454. More turns can unlock model formation, but too late to plan cost-effectively.
+The extended-horizon run did not make the fair scheduler observable. The agent spent eight turns probing, installed its first model 157.9 seconds into turn 9, and obtained its only backtest (8/8) at 160.1 seconds. Its first queued click under that model immediately mispredicted, so the executor halted the remaining plan; BFS was never called. Turn 9 alone cost $1.6287 (38.4% of the run) and raised the total to $4.2454. Active context grew from 31.6k tokens on turn 1 to 80.1k on turn 8 and 116.5k on turn 9, while runner prompts stayed near 5k characters. The late spike came from accumulated resumed context plus 15,004 characters of model and inline-analysis arguments repeated across 11 inference calls, not prompt growth or tool output. More turns can unlock model formation, but too late to plan cost-effectively.
 
 To target that bottleneck without changing the method prompt, full history now appends a game-agnostic model gate after the first transition while no model is installed. It asks for a minimal conservative model and backtest, and disappears once a model is live. Unit tests cover the resumed no-model and installed-model paths. The first matched live attempt could not evaluate the intervention: Claude returned an expired-OAuth error with zero tokens/actions/cost on every attempted turn, so the run was discarded.
 
@@ -58,7 +58,8 @@ The next search change replaces node-major BFS expansion with candidate-major, d
 - Harness-owned event, gateway, prompt, configuration, and session paths are immutable to agent tools. Raw events, timeline, ledger, live-model pointer, debug logs, credentials, and sessions are unreadable through file tools or sandboxed children; `runtime/gateway_state.json` remains readable as a computational form of the current observation already present in the prompt. Tests cover traversal, variables, symlinks, pre-existing hard links, edit-clone/write aliases, nested interpreters, `ctypes`, subprocesses, network, worker timeout, and durable ledger completion.
 - `run_backtest(start=...)` again emits the required `[range #a..#b]` prefix; all 14 public tool schemas remain unchanged.
 - Structured driver errors now stop after one turn, close with `run_finished`, and return nonzero instead of consuming the no-progress allowance. This was added after the second zero-token provider failure; its focused integration test and structured review are clean.
-- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), and provider fail-fast **clean** (0.83).
+- Live runners now acquire a nonblocking, per-user `flock` shared across worktrees. Overlap fails before environment initialization, and the lock releases on normal or exceptional exit. This mechanizes the repository's one-subscription-run rule; older already-running branches still require manual coordination.
+- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), and live-run serialization **clean** (0.86).
 
 ## Clean-evaluation ledger
 
