@@ -14,6 +14,9 @@ V12_PROMPT = (
 V13_PROMPT = (
     REPO_ROOT / "schema_harness" / "prompts" / "physicist_v13_renderer_provenance.md"
 )
+V14_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v14_renderer_precedence.md"
+)
 
 
 def test_v10_grounds_actual_and_predicted_frames_without_losing_v8_seeding():
@@ -197,3 +200,47 @@ def test_v13_certifies_renderer_provenance_before_future_unocclusion():
         "Keep sprites, HUD, and mutable objects out of static seeds",
     ):
         assert inherited_v12_rule in prompt
+
+
+def test_v14_certifies_contextual_renderer_precedence_before_batching():
+    prompt = V14_PROMPT.read_text(encoding="utf-8")
+
+    for precedence_gate in (
+        "evidence-backed, possibly conditional renderer rule",
+        "not as a universal stack",
+        "two or more active layers propose different normalized values",
+        '`check_renderer_precedence(state, grid, action, x, y) -> {"contenders": ..., "winner": ..., "support": ..., "unknown_precedence": ...}`',
+        "matched overlap of the same layer roles or types and relevant local conditions",
+        "`support` must identify the matched history transition, cell, roles, and relevant conditions or the executable invariant used",
+        "independently re-evaluate every witness from structured history or the invariant",
+        "every distinguishable overlap appears in exactly one of the mechanically supported or `unknown_precedence` sets",
+        "every supported winner has a verified witness",
+        "An unsupported winner prediction must populate `unknown_precedence`",
+        "the predicted winner alone is never evidence",
+        "does not license a total order, transitivity",
+        "transfer across occupancy, masks, action phase, or other untested conditions",
+        "partial, contextual relations",
+        "`run_python` must assert `unknown_precedence == []`",
+        "exact normalized next-grid value",
+        "observationally irrelevant for that suffix",
+        "final isolated probe",
+        "no dependent suffix",
+        "alone when the prefix is empty",
+        "Isolation relaxes only pre-action consensus",
+        "compare the complete normalized successor exactly against every candidate's pre-recorded complete prediction",
+        "mark every mismatch",
+    ):
+        assert precedence_gate in prompt
+
+    for inherited_v13_rule in (
+        "produce an executable renderer-provenance certificate",
+        '`check_renderer_provenance(state, grid, action, x, y) -> {"revealed": ..., "unknown_base": ...}`',
+        "`run_python` must assert `unknown_base == []`",
+        "Every non-final batched action requires version-space agreement",
+        "exact normalized next grid",
+        "require an executable certificate for the exact suffix",
+    ):
+        assert inherited_v13_rule in prompt
+
+    for overfit_fragment in ("r11l", "(57,55)", "socket arm"):
+        assert overfit_fragment not in prompt
