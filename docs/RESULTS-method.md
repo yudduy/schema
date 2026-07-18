@@ -99,9 +99,11 @@ The final lock-bearing no-timeout/native-compaction launcher was dry-smoked at `
 
 At 14:38 PDT, before the provider reset, the 18-file censored cd82 workdir was copied byte-for-byte to `/private/tmp/schema-m3-cd82-v15.QkTxZ9.censored`; a relative-path/content digest matches the then-active source at `a9201a7c…`. That source changed exactly `config/claude/settings.json` from `autoCompactEnabled: false` to `true`, yielding digest `def13ff6…`; recursive comparison confirms every other file is identical. The later adversarial audit rejected resuming either variant because the saved Claude session had three quota-only requests. Both are setup artifacts, not measured-workdir candidates; the final fresh run receives no mutation exception.
 
-After commit `f5c86a1` fixed the fresh-session and beacon rules at 21:55:45 UTC, the amended variant was archived as `/private/tmp/schema-m3-cd82-v15.QkTxZ9.amended-aborted`. The actual cd82 measurement workdir is the proven-empty `/private/tmp/schema-m3-cd82-v15-final.kz3eZW`; no harness initialization, Claude session, grid inspection, or file creation occurred there before this entry.
+After commit `f5c86a1` fixed the fresh-session and beacon rules at 21:55:45 UTC, the amended variant was archived as `/private/tmp/schema-m3-cd82-v15.QkTxZ9.amended-aborted`. The actual cd82 measurement workdir is the proven-empty `/private/tmp/schema-m3-cd82-v15-final.kz3eZW`; no harness initialization, Claude or Codex session, grid inspection, or file creation occurred there before this entry.
 
 The frozen measurement environment is Claude Code 2.1.214, Python 3.12.13, `arc-agi` 0.9.9, and `arcengine` 0.9.3. Codex CLI 0.144.1 was used only for the read-only structured preregistration review, not gameplay. The harness tree remains `496abf46…` and the prompt hash remains `a9860a5c…`.
+
+Before that empty workdir was initialized, the user directed all subsequent testing to GPT-5.6 Luna and explicitly made Claude availability non-blocking. The M3 and M4 execution protocol below therefore supersedes the unexecuted Claude launcher prospectively: `gpt-5.6-luna` at reasoning effort `max` runs through Codex CLI 0.144.1 under the ChatGPT subscription. The prompt bytes, harness tree, game order, pass thresholds, fresh-workdir rule, and no-rerun rule do not change. This provider substitution makes the result a Luna reproduction of the Schema method and score target, not an exact reproduction of the published Claude model pairing.
 
 With no runner active, the official `arc-agi==0.9.9` NORMAL-mode acquisition path then prefetched the 21 remaining exact benchmark versions into the ignored local cache. `Arcade.make` internally instantiated and reset each environment, but no frame was rendered or inspected and no model or non-RESET gameplay action ran; the setup scorecard was closed. A final OFFLINE scan matched all 25 IDs in `vendor/baseline_actions.csv` exactly. This is provisioning evidence only, not a measured game exposure, and it leaves the committed harness tree unchanged.
 
@@ -195,53 +197,31 @@ The level-5 false impossibility claim shifts the distribution to a completeness-
 
 ## Pre-registered M3 Validation
 
-Frozen v15 is now pre-registered for serial measurement on a fresh `cd82-fb555c5d` run and then one externally randomized project-unrun Public-set game. FT09 was disqualified after the required report review exposed its detailed case study and before FT09 was run. Keeping FT09's six-level shape and excluding featured-case-study or project-exposed games leaves the canonical-CSV-ordered pool `[cn04-2fe56bfb, sc25-635fd71a, sp80-589a99af, tr87-cd924810]`, with human totals `[789, 350, 518, 414]`. Selection uses the `outputValue` of the first [NIST Randomness Beacon 2.0](https://csrc.nist.gov/projects/interoperable-randomness-beacons/beacon-20) pulse strictly after `2026-07-18T22:05:00Z`, fetched only after this rule is committed from `/beacon/2.0/pulse/time/next/1784412300000`; `int(outputValue, 16) % 4` indexes that fixed pool. This prevents choosing among already public per-game outcomes, but the selected run remains prospective Public-set validation rather than outcome-blind evidence. The fixed method identity remains prompt SHA-256 `a9860a5c8245a734afb3e5f2d802a9b6745d62b72eeaf7d49000dc905631d3fd` plus `schema_harness` tree `496abf464213baa7d12bc55db4060b8f4e4fb464`; documentation-only commits may occur, but any harness-tree or prompt-byte change invalidates the pair.
+Frozen v15 is now pre-registered for serial measurement on a fresh `cd82-fb555c5d` run and then one externally randomized project-unrun Public-set game. FT09 was disqualified after the required report review exposed its detailed case study and before FT09 was run. Keeping FT09's six-level shape and excluding featured-case-study or project-exposed games leaves the canonical-CSV-ordered pool `[cn04-2fe56bfb, sc25-635fd71a, sp80-589a99af, tr87-cd924810]`, with human totals `[789, 350, 518, 414]`. Selection uses the `outputValue` of the first [NIST Randomness Beacon 2.0](https://csrc.nist.gov/projects/interoperable-randomness-beacons/beacon-20) pulse strictly after `2026-07-18T22:05:00Z`, fetched only after this rule is committed from `/beacon/2.0/pulse/time/next/1784412300000`; `int(outputValue, 16) % 4` indexes that fixed pool. Pulse `1865446` at `2026-07-18T22:06:00Z` returned `133DBF7A…4ED29`; its remainder is `1`, selecting `sc25-635fd71a`. This prevents choosing among already public per-game outcomes, but the selected run remains prospective Public-set validation rather than outcome-blind evidence. The fixed method identity remains prompt SHA-256 `a9860a5c8245a734afb3e5f2d802a9b6745d62b72eeaf7d49000dc905631d3fd` plus `schema_harness` tree `496abf464213baa7d12bc55db4060b8f4e4fb464`; documentation-only commits may occur, but any harness-tree or prompt-byte change invalidates the pair.
 
-Each game must finish `WIN`, clear 6/6 levels, score RHAE at least 90.00%, pass the anti-cheat guard, retain contiguous event and action indices, end with a `WIN` gateway state and no incomplete ledger turn, and match the frozen source/snapshot/metadata hash. Both start from empty workdirs and new Claude sessions. Runs use `claude-fable-5`, effort `max`, no subprocess timeout, 3,000 actions, 12 turns per invocation, $7.50 turn and $36 invocation cost caps, three no-progress turns, native Claude auto-compaction, and an unreachable `9223372036854775807`-token manual-rollover threshold. `DISABLE_AUTO_COMPACT` must be absent from the driver environment. A capped or provider-censored continuation may resume only its original workdir and session with exactly those settings; a reset or fresh rerun after a productive model turn cannot replace it. `run.json` does not persist all caps or effort, so this identity is enforced by the verbatim command, snapshotted isolated settings, and audit rather than metadata alone; invocation-local cost and no-progress counters reset while telemetry remains cumulative in the event stream. Process preflight must show no other harness runner before launch, and the external launcher must hold the same nonblocking `schema-harness-live-<uid>.lock` under `tempfile.gettempdir()` used by the newer TOOLING branch for the complete invocation. Read-only audits may inspect durable run records, but model execution or planning must use a copied workdir and isolated scratch files; measured-workdir modification between invocations invalidates cleanliness.
+Each game must finish `WIN`, clear 6/6 levels, score RHAE at least 90.00%, pass the anti-cheat guard, retain contiguous event and action indices, end with a `WIN` gateway state and no incomplete ledger turn, and match the frozen source/snapshot/metadata hash. Both start from empty workdirs and new Codex sessions. Runs use `gpt-5.6-luna`, reasoning effort `max`, no subprocess timeout, 3,000 actions, 12 turns per invocation, three no-progress turns, one resumed session per game, and native auto-compaction at 240,000 tokens. ChatGPT-subscription execution exposes token telemetry but no per-turn dollar charge, so the superseded Claude dollar caps are not imputed as zero-cost controls; the fixed turn and no-progress bounds remain the invocation controls. A censored continuation may resume only its original workdir and session with exactly those settings; a reset or fresh rerun after a productive model turn cannot replace it. `run.json` does not persist all driver settings, so identity is enforced by the verbatim invocation, archived Codex JSONL, and audit rather than metadata alone. Process preflight must show no other harness runner before launch, and the external launcher must hold the same nonblocking `schema-harness-live-<uid>.lock` under `tempfile.gettempdir()` for the complete invocation. Read-only audits may inspect durable run records, but model execution or planning must use a copied workdir and isolated scratch files; measured-workdir modification between invocations invalidates cleanliness.
+
+Before cd82, a one-action BP35 smoke must prove the Luna adapter, scorer path, and fail-closed tool boundary. Every Codex invocation ignores host config and rules, uses a per-game Codex home containing only a link to subscription auth plus that game's session store, disables the default shell, web search, apps, hooks, goals, memories, plugins, remote plugins, multi-agent tools, browser/computer/image tools, and configures exactly one required stdio MCP server: `locus`. The archived `--json` stream must contain no non-locus tool call; any built-in tool use or direct protected-file read invalidates the invocation before a project-unrun game begins. Codex output and driver audit files live outside the measured workdir. Locus remains the only path for notes, models, backtests, search, and committed actions. The pre-run adapter is `/private/tmp/schema-luna-driver-v1.py`, SHA-256 `ad5285b7fed4fb4bb88e6a9d97ee06dfd52d823d75277854aee0d34394b8ac79`; any byte change requires a new prospective ledger entry.
 
 The command template is:
 
 ```bash
-env -u DISABLE_AUTO_COMPACT ONLY_RESET_LEVELS=true uv run python -c \
-  'import fcntl, json, os, tempfile
-from pathlib import Path
-from schema_harness.runner import parse_args, run_dry, run_live
-args = parse_args()
-args.turn_timeout = None
-lock_path = Path(tempfile.gettempdir()) / f"schema-harness-live-{os.getuid()}.lock"
-flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-descriptor = os.open(lock_path, flags, 0o600)
-with os.fdopen(descriptor, "r+") as lock:
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit(f"another live Schema harness run is active ({lock_path})") from None
-    try:
-        settings = args.workdir / "config" / "claude" / "settings.json"
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        config = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
-        if config.get("autoCompactEnabled") is not True:
-            config["autoCompactEnabled"] = True
-            settings.write_text(json.dumps(config, sort_keys=True) + "\n", encoding="utf-8")
-        assert json.loads(settings.read_text(encoding="utf-8"))["autoCompactEnabled"] is True
-        code = (run_dry if args.dry_run else run_live)(args)
-    finally:
-        fcntl.flock(lock, fcntl.LOCK_UN)
-raise SystemExit(code)' \
-  --game GAME --model claude-fable-5 --effort max \
-  --max-actions 3000 --max-turns 12 --turn-cost-cap 7.5 --run-cost-cap 36 \
-  --no-progress-turns 3 --context-rollover-tokens 9223372036854775807 \
+env -u DISABLE_AUTO_COMPACT ONLY_RESET_LEVELS=true \
+uv run python /private/tmp/schema-luna-driver-v1.py \
+  --game GAME --model gpt-5.6-luna --effort max \
+  --max-actions 3000 --max-turns 12 --no-progress-turns 3 \
+  --auto-compact-tokens 240000 \
   --system-prompt-file schema_harness/prompts/physicist_v15_reachability_certificate.md \
-  --workdir FRESH_WORKDIR
+  --workdir FRESH_WORKDIR --audit-dir FRESH_EXTERNAL_AUDIT_DIR
 ```
 
 Both passes are required for M3. Scoring will stage the two distinct trajectories once each under the vendored scorer, never duplicate one run across dataset trees. The later 25-game sweep retains the stronger approximately 99% aggregate replication target; that aggregate target is not substituted for this per-game generalization gate.
 
 ## Pre-registered M4 Replication
 
-The published 98.98% Claude result is not a Fable-only sweep. It uses a fixed fallback rule: run Opus 4.8 Max first, rerun games scoring below 80 RHAE with Fable 5 Max, and retain the higher per-game score; the released aggregate retains 14 Opus and 11 Fable runs ([Schema, Figure 6 and pairing ledger](https://schema-harness.github.io/)). M4 will reproduce that selection rule with the same frozen v15 prompt and harness tree. Model routing will not use released per-game winners or trajectories. The two Fable M3 runs may count as fallback candidates only when the independently run Opus result triggers the pre-registered threshold.
+The published 98.98% Claude result is not a Fable-only sweep. It uses a fixed fallback rule: run Opus 4.8 Max first, rerun games scoring below 80 RHAE with Fable 5 Max, and retain the higher per-game score; the released aggregate retains 14 Opus and 11 Fable runs ([Schema, Figure 6 and pairing ledger](https://schema-harness.github.io/)). That pairing remains the published comparator, but the user-directed M4 reproduction runs GPT-5.6 Luna Max on every game and does not stop or change routing when Claude is unavailable. Released per-game winners and trajectories do not influence Luna routing.
 
-The 25 canonical IDs will run serially in `vendor/baseline_actions.csv` order, each model in a separate fresh workdir with no cross-run notes, session, model, or scratch files. Every invocation uses M3's no-timeout wrapper, action limit, caps, no-progress limit, native-compaction setting, and unreachable manual-rollover threshold; provider-censored or capped runs resume only their original workdir. Each retained run must pass the same sequence, gateway, ledger, prompt, harness-tree, scorer, and guard audits. The target is 25 wins, 183/183 levels, and mean RHAE at least the published 98.98%. The official result and any reproduction remain self-reported Public-set evidence, not ARC Prize verification or a Semi-private generalization claim.
+The 25 canonical IDs will run serially in `vendor/baseline_actions.csv` order, each in a separate fresh workdir with no cross-run notes, session, model, or scratch files. Every invocation uses M3's isolated Luna adapter, no-timeout wrapper, action limit, turn bound, no-progress limit, and compaction setting; provider-censored runs resume only their original workdir. Each retained run must pass the same sequence, gateway, ledger, prompt, harness-tree, scorer, and guard audits. The target is 25 wins, 183/183 levels, and mean RHAE at least the published 98.98%. The official result and any reproduction remain self-reported Public-set evidence, not ARC Prize verification or a Semi-private generalization claim.
 
 ## Status and Uncertainty
 
