@@ -181,6 +181,8 @@ def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
     with _service(tmp_path, events_path=events) as service:
         state_path = tmp_path / "runtime" / "gateway_state.json"
         state_before = state_path.read_bytes()
+        state_alias = tmp_path / "state-alias.json"
+        os.link(state_path, state_alias)
 
         with pytest.raises(ValueError, match="harness-managed path is read-only"):
             service.write_file("events.jsonl", "forged\n")
@@ -188,6 +190,8 @@ def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
             service.write_file("runtime/gateway_state.json", "forged\n")
         with pytest.raises(ValueError, match="harness-managed path is read-only"):
             service.rm("events.jsonl")
+        with pytest.raises(ValueError, match="harness-managed path is read-only"):
+            service.edit_file("state-alias.json", "", "")
 
         python_output = service.run_python(
             "open('events.jsonl', 'w').write('forged')"
@@ -201,6 +205,10 @@ def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
             "ln events.jsonl audit-link && printf forged > audit-link"
         )
         assert "exit=0" not in hardlink_output
+        state_alias_output = service.run_shell(
+            "printf forged > state-alias.json"
+        )
+        assert "exit=0" not in state_alias_output
 
         assert state_path.read_bytes() == state_before
         records = [json.loads(line) for line in events.read_text().splitlines()]
@@ -213,23 +221,98 @@ def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
         )
 
 
+def test_raw_history_is_private_but_current_snapshot_is_readable(tmp_path):
+    events = tmp_path / "raw-events.jsonl"
+    debug = tmp_path / "runtime" / "locus.jsonl"
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-1",
+        turn=1,
+        events_path=events,
+        debug_log=debug,
+        arcade=FakeArcade(),
+    ) as service:
+        service.commit_actions([{"action": 3}], "create raw history")
+
+    event_alias = tmp_path / "event-alias.jsonl"
+    os.link(events, event_alias)
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        events_path=events,
+        debug_log=debug,
+        arcade=FakeArcade(),
+    ) as service:
+        private_paths = (
+            "raw-events.jsonl",
+            "event-alias.jsonl",
+            "runtime/gateway_timeline.jsonl",
+            "runtime/turn_ledger.json",
+            "runtime/locus.jsonl",
+        )
+        for path in private_paths:
+            with pytest.raises(ValueError, match="harness-private path"):
+                service.read_file(path)
+        with pytest.raises(ValueError, match="harness-managed path is read-only"):
+            service.edit_file("event-alias.jsonl", "", "")
+        assert event_alias.samefile(events)
+
+        listing = service.find("*")
+        assert all(path not in listing for path in private_paths)
+        assert service.grep("create raw history", ".") == "No matches."
+
+        snapshot = service.read_file("runtime/gateway_state.json")
+        assert '"history_len":1' in snapshot
+        python_snapshot = service.run_python(
+            "import json; print(json.load(open('runtime/gateway_state.json'))['history_len'])"
+        )
+        assert "exit=0" in python_snapshot and "\n1\n" in python_snapshot
+
+        python_raw = service.run_python(
+            "print(open('raw-events.jsonl').read())"
+        )
+        shell_raw = service.run_shell("cat runtime/gateway_timeline.jsonl")
+        hardlink_raw = service.run_shell(
+            "ln raw-events.jsonl fresh-alias && cat fresh-alias"
+        )
+        for output in (python_raw, shell_raw, hardlink_raw):
+            assert "exit=0" not in output
+            assert "create raw history" not in output
+
+
 def test_harness_private_config_is_unreadable_to_agent_tools(tmp_path):
     private = tmp_path / "config" / "claude" / ".claude.json"
     private.parent.mkdir(parents=True)
     private.write_text("credential-material", encoding="utf-8")
+    alias = tmp_path / "credential-alias"
+    os.link(private, alias)
     with _service(tmp_path) as service:
         with pytest.raises(ValueError, match="harness-private path"):
             service.read_file("config/claude/.claude.json")
+        with pytest.raises(ValueError, match="harness-private path"):
+            service.read_file("credential-alias")
         assert "config/claude/.claude.json" not in service.find("*")
+        assert "credential-alias" not in service.find("*")
         assert "credential-material" not in service.grep("credential-material", ".")
         python_output = service.run_python(
             "print(open('config/claude/.claude.json').read())"
         )
         shell_output = service.run_shell("cat config/claude/.claude.json")
+        python_alias = service.run_python(
+            "print(open('credential-alias').read())"
+        )
+        shell_alias = service.run_shell("cat credential-alias")
     assert "credential-material" not in python_output
     assert "exit=0" not in python_output
     assert "credential-material" not in shell_output
     assert "exit=0" not in shell_output
+    assert "credential-material" not in python_alias
+    assert "exit=0" not in python_alias
+    assert "credential-material" not in shell_alias
+    assert "exit=0" not in shell_alias
 
 
 def test_agent_world_model_exec_is_sandboxed_during_probe_and_prediction(tmp_path):

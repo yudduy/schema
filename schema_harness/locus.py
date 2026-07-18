@@ -52,6 +52,15 @@ _HARNESS_MANAGED_FILES = frozenset(
 )
 _HARNESS_MANAGED_DIRS = frozenset({"config", "framework", "runtime", "sessions"})
 _HARNESS_PRIVATE_DIRS = frozenset({"config", "sessions"})
+_HARNESS_PRIVATE_FILES = _HARNESS_MANAGED_FILES
+_HARNESS_PRIVATE_RUNTIME_FILES = frozenset(
+    {
+        PersistentGateway.TIMELINE_NAME,
+        PersistentGateway.LEDGER_NAME,
+        PersistentGateway.MODEL_NAME,
+        "locus.jsonl",
+    }
+)
 LOCK_MESSAGE = "Already committed this turn — end your turn now."
 COMMIT_MESSAGE = "Committed {count} action(s). Stop now — end your turn, do not call more tools."
 _MODEL_PATTERN = re.compile(r"world_model_v\d+\.py")
@@ -340,8 +349,11 @@ class LocusService:
             relative.as_posix() in _HARNESS_MANAGED_FILES
             or bool(relative.parts and relative.parts[0] in _HARNESS_MANAGED_DIRS)
         )
-        if self.event_log is not None and path == self.event_log.path.resolve():
-            managed = True
+        if not managed and path.exists():
+            managed = any(
+                protected.exists() and path.samefile(protected)
+                for protected in self._managed_write_files()
+            )
         if managed:
             raise ValueError(
                 f"harness-managed path is read-only: {relative.as_posix()}"
@@ -349,20 +361,100 @@ class LocusService:
 
     def _require_agent_readable(self, path: Path) -> None:
         relative = path.relative_to(self.workdir)
-        if relative.parts and relative.parts[0] in _HARNESS_PRIVATE_DIRS:
+        private = (
+            relative.as_posix() in _HARNESS_PRIVATE_FILES
+            or bool(relative.parts and relative.parts[0] in _HARNESS_PRIVATE_DIRS)
+            or bool(
+                len(relative.parts) == 2
+                and relative.parts[0] == "runtime"
+                and relative.parts[1] in _HARNESS_PRIVATE_RUNTIME_FILES
+            )
+        )
+        if not private and path.exists():
+            private = any(
+                protected.exists() and path.samefile(protected)
+                for protected in self._private_read_files()
+            )
+        if private:
             raise ValueError(f"harness-private path is not readable: {relative.as_posix()}")
+
+    def _dynamic_log_files(self) -> set[Path]:
+        files: set[Path] = set()
+        if self.event_log is not None:
+            files.add(self.event_log.path.resolve())
+        if self.debug_log is not None:
+            files.add(
+                (
+                    self.debug_log
+                    if self.debug_log.is_absolute()
+                    else self.workdir / self.debug_log
+                ).resolve()
+            )
+        return files
+
+    def _files_below(self, directory_names: Sequence[str]) -> set[Path]:
+        files: set[Path] = set()
+        for name in directory_names:
+            directory = self.workdir / name
+            if directory.is_dir():
+                files.update(
+                    candidate
+                    for candidate in directory.rglob("*")
+                    if candidate.is_file()
+                )
+        return files
+
+    def _hardlink_aliases(self, protected_files: set[Path]) -> set[Path]:
+        """Find workdir names sharing a protected inode on resumed runs."""
+
+        protected_inodes: set[tuple[int, int]] = set()
+        for protected in protected_files:
+            try:
+                stat = protected.stat()
+            except OSError:
+                continue
+            if stat.st_nlink > 1:
+                protected_inodes.add((stat.st_dev, stat.st_ino))
+        if not protected_inodes:
+            return set()
+
+        aliases: set[Path] = set()
+        for candidate in self.workdir.rglob("*"):
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            if candidate.is_file() and (stat.st_dev, stat.st_ino) in protected_inodes:
+                resolved = candidate.resolve()
+                if resolved not in protected_files:
+                    aliases.add(resolved)
+        return aliases
+
+    def _managed_write_files(self) -> tuple[Path, ...]:
+        files = {self.workdir / name for name in _HARNESS_MANAGED_FILES}
+        files.update(self._dynamic_log_files())
+        protected = files | self._files_below(tuple(_HARNESS_MANAGED_DIRS))
+        files.update(self._hardlink_aliases(protected))
+        return tuple(sorted(files))
 
     def _managed_write_denials(self) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
         directories = tuple(self.workdir / name for name in _HARNESS_MANAGED_DIRS)
-        files = {self.workdir / name for name in _HARNESS_MANAGED_FILES}
-        if self.event_log is not None:
-            event_path = self.event_log.path.resolve()
-            if event_path.is_relative_to(self.workdir):
-                files.add(event_path)
-        return directories, tuple(files)
+        return directories, self._managed_write_files()
 
-    def _managed_read_denials(self) -> tuple[Path, ...]:
-        return tuple(self.workdir / name for name in _HARNESS_PRIVATE_DIRS)
+    def _private_read_files(self) -> tuple[Path, ...]:
+        files = {self.workdir / name for name in _HARNESS_PRIVATE_FILES}
+        files.update(
+            self.workdir / "runtime" / name
+            for name in _HARNESS_PRIVATE_RUNTIME_FILES
+        )
+        files.update(self._dynamic_log_files())
+        protected = files | self._files_below(tuple(_HARNESS_PRIVATE_DIRS))
+        files.update(self._hardlink_aliases(protected))
+        return tuple(sorted(files))
+
+    def _managed_read_denials(self) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+        directories = tuple(self.workdir / name for name in _HARNESS_PRIVATE_DIRS)
+        return directories, self._private_read_files()
 
     @staticmethod
     def _install_suffix(interface: ModelInterface) -> str:
@@ -392,12 +484,14 @@ class LocusService:
         matplotlib = scratch / "matplotlib"
         process_tmp.mkdir(parents=True, exist_ok=True)
         matplotlib.mkdir(parents=True, exist_ok=True)
+        denied_read_directories, denied_read_files = self._managed_read_denials()
         command, reason = sandbox_exec_argv(
             [sys.executable, "-m", "schema_harness.model_worker", *arguments],
             workdir=self.workdir,
             read_paths=(sys.prefix, sys.base_prefix, _PACKAGE_ROOT),
             read_literals=(_REPO_ROOT,),
-            deny_read_paths=self._managed_read_denials(),
+            deny_read_paths=denied_read_directories,
+            deny_read_literals=denied_read_files,
             write_paths=(scratch,),
             allow_subprocesses=False,
             allow_read_metadata=True,
@@ -824,11 +918,13 @@ class LocusService:
         duration = self.process_timeout if timeout is None else timeout
         guarded = wrap_python(code, self.workdir)
         denied_directories, denied_files = self._managed_write_denials()
+        denied_read_directories, denied_read_files = self._managed_read_denials()
         command, reason = sandbox_exec_argv(
             [sys.executable, "-c", guarded],
             workdir=self.workdir,
             read_paths=(sys.prefix, sys.base_prefix),
-            deny_read_paths=self._managed_read_denials(),
+            deny_read_paths=denied_read_directories,
+            deny_read_literals=denied_read_files,
             deny_write_paths=denied_directories,
             deny_write_literals=denied_files,
             allow_read_metadata=True,
@@ -868,10 +964,12 @@ class LocusService:
         if not safe:
             return self._invoke("run_shell", args, lambda: f"ERROR: {reason}")
         denied_directories, denied_files = self._managed_write_denials()
+        denied_read_directories, denied_read_files = self._managed_read_denials()
         sandboxed, reason = sandbox_exec_argv(
             ["/bin/sh", "-c", shell_command],
             workdir=self.workdir,
-            deny_read_paths=self._managed_read_denials(),
+            deny_read_paths=denied_read_directories,
+            deny_read_literals=denied_read_files,
             deny_write_paths=denied_directories,
             deny_write_literals=denied_files,
         )
@@ -912,6 +1010,7 @@ class LocusService:
         def operation() -> str:
             target = self._resolve(path)
             self._require_agent_writable(target)
+            self._require_agent_readable(target)
             content = target.read_text(encoding="utf-8")
             count = content.count(old_string)
             if count == 0:
