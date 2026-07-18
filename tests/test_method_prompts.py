@@ -11,6 +11,9 @@ V11_PROMPT = (
 V12_PROMPT = (
     REPO_ROOT / "schema_harness" / "prompts" / "physicist_v12_applicability_certificate.md"
 )
+V13_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v13_renderer_provenance.md"
+)
 
 
 def test_v10_grounds_actual_and_predicted_frames_without_losing_v8_seeding():
@@ -154,3 +157,43 @@ def test_v12_certifies_action_applicability_separately_from_effects():
         "require an executable certificate for the exact suffix",
     ):
         assert inherited_v11_rule in prompt
+
+
+def test_v13_certifies_renderer_provenance_before_future_unocclusion():
+    prompt = V13_PROMPT.read_text(encoding="utf-8")
+
+    for provenance_gate in (
+        "ordered composite of persistent base or world layers and transient renderer layers",
+        "produce an executable renderer-provenance certificate",
+        "every cell whose topmost transient layer can change anywhere in the planned rollout",
+        "Starting from the structured level-entry observation",
+        "mechanically compute the cover, uncover, and overwrite set at every step",
+        "Track the persistent base separately from transient layers",
+        "exact previously unoccluded observation or an executable history-supported invariant",
+        "Never fill an occluded base cell from a default or visual guess; use only a prior unoccluded observation or an executable history-supported invariant",
+        "never let drawing or erasing a transient layer mutate the persistent base",
+        '`check_renderer_provenance(state, grid, action, x, y) -> {"revealed": ..., "unknown_base": ...}`',
+        "equivalent executable adapter over its renderer",
+        "on the same threaded pre-state",
+        "Before accepting every non-final predicted successor",
+        "`run_python` must assert `unknown_base == []`",
+        "verify the predicted values at every revealed cell",
+        "canonical renderer fact that can change a later suffix prediction",
+        "candidates need not use identical internal cache representations",
+        "stop the certified prefix before that action",
+        "final isolated probe, with no dependent suffix",
+        "Full replay does not certify a future unocclusion that history never exercised",
+        "repair only the owning renderer or initialization rule",
+        "without discarding a still-correct causal transition",
+    ):
+        assert provenance_gate in prompt
+
+    for inherited_v12_rule in (
+        "Model action applicability or preconditions separately from conditional effects",
+        "`check_applicability(state, grid, action, x, y) -> True | False | None`",
+        "Every non-final batched action requires version-space agreement",
+        "produce an executable initialization certificate through two independent paths",
+        "require an executable certificate for the exact suffix",
+        "Keep sprites, HUD, and mutable objects out of static seeds",
+    ):
+        assert inherited_v12_rule in prompt
