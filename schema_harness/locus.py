@@ -851,6 +851,14 @@ class LocusService:
             )
             if inspector_records:
                 appendix += "\n" + "\n".join(inspector_records)
+            if timeline and self.gateway.live_model_path() is None:
+                unit = "transition" if len(timeline) == 1 else "transitions"
+                appendix += (
+                    f"\nModel gate: NONE after {len(timeline)} {unit}. Write a minimal "
+                    "world_model_v1.py now and run run_backtest; without an installed model, "
+                    "commit_actions can execute only one probe. Model unknown actions "
+                    "conservatively instead of waiting to solve every control."
+                )
             if 6 in self.gateway.gateway.legal_actions:
                 targets = discover_click_targets(self.gateway.gateway.grid)
                 appendix += (

@@ -448,9 +448,30 @@ def test_read_history_keeps_original_prefix_and_appends_grid_inspector(tmp_path)
         "  4@[r0..1,c0..1] from={0:4} to={1:4}\n"
         "    patch before=[[0,0],[0,0]] after=[[1,1],[1,1]]\n"
         "value_pairs={0->1:4}\n"
+        "Model gate: NONE after 1 transition. Write a minimal world_model_v1.py "
+        "now and run run_backtest; without an installed model, commit_actions can "
+        "execute only one probe. Model unknown actions conservatively instead of "
+        "waiting to solve every control.\n"
         "Current-grid click target proposals (1; component-based, unverified; "
         "pass selected coordinates as run_bfs clicks): [[0,0]]"
     )
+
+
+def test_read_history_omits_model_gate_once_a_model_is_installed(tmp_path):
+    source = "def step(grid, action, x=None, y=None):\n    return grid, {}\n"
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history()
+
+    assert "Model gate:" not in output
 
 
 def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
