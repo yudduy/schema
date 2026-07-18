@@ -336,3 +336,15 @@ def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["kind"] for event in events].count("turn_started") == 1
     assert events[-1]["kind"] == "run_finished"
+
+
+def test_live_run_lock_rejects_overlap_and_releases(tmp_path):
+    lock_path = tmp_path / "schema-live.lock"
+
+    with runner_module._live_run_lock(lock_path):
+        with pytest.raises(RuntimeError, match="another live Schema harness run is active"):
+            with runner_module._live_run_lock(lock_path):
+                pass
+
+    with runner_module._live_run_lock(lock_path):
+        pass

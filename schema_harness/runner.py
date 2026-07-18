@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import json
 import os
@@ -14,9 +15,10 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -59,6 +61,29 @@ NOTES_TEMPLATE = """# Notes — your living scratchpad (shown to you every turn)
 """
 FALLBACK_REASON = "ended without commit_actions — no action taken, game state unchanged (warned next turn)"
 _MODEL_PATTERN = re.compile(r"world_model_v(\d+)\.py")
+_LIVE_RUN_LOCK = Path(tempfile.gettempdir()) / f"schema-harness-live-{os.getuid()}.lock"
+
+
+@contextmanager
+def _live_run_lock(path: Path = _LIVE_RUN_LOCK) -> Iterator[None]:
+    """Prevent overlapping subscription game runs across worktrees."""
+
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    handle = os.fdopen(descriptor, "r+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise RuntimeError(
+            f"another live Schema harness run is active (lock: {path})"
+        ) from None
+    try:
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -711,6 +736,11 @@ def _record_driver_result(
 
 
 def run_live(args: argparse.Namespace) -> int:
+    with _live_run_lock():
+        return _run_live(args)
+
+
+def _run_live(args: argparse.Namespace) -> int:
     workdir, snapshot = initialize_workdir(
         args.workdir,
         game=args.game,
