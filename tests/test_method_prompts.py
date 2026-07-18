@@ -8,6 +8,9 @@ V10_PROMPT = (
 V11_PROMPT = (
     REPO_ROOT / "schema_harness" / "prompts" / "physicist_v11_inventory_consensus.md"
 )
+V12_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v12_applicability_certificate.md"
+)
 
 
 def test_v10_grounds_actual_and_predicted_frames_without_losing_v8_seeding():
@@ -98,3 +101,56 @@ def test_v11_certifies_initial_inventory_and_candidate_consensus():
         "Keep sprites, HUD, and mutable objects out of static seeds",
     ):
         assert inherited_v10_rule in prompt
+
+
+def test_v12_certifies_action_applicability_separately_from_effects():
+    prompt = V12_PROMPT.read_text(encoding="utf-8")
+
+    for applicability_gate in (
+        "Model action applicability or preconditions separately from conditional effects",
+        "syntactically legal action or in-bounds target",
+        "evidence-backed applicability domain",
+        "action or control type, local pre-state or target class, and target footprint or geometry",
+        "mechanically classify its target and full footprint from the structured current grid",
+        "Each candidate used to certify a multi-action suffix",
+        "`check_applicability(state, grid, action, x, y) -> True | False | None`",
+        "equivalent executable adapter over explicit transition guards",
+        "`run_python` must assert `True` before `call_predict` for every non-final batched action",
+        "a default identity fallthrough is not a certified no-effect successor",
+        "applicability is true and explicit conditional-effect logic predicts it",
+        "same intended progress or goal predicate and equivalent transition-relevant state",
+        "total real actions to that horizon across every plausible applicability and effect branch",
+        "including the probe, observation and replan, and recovery after a no-op, HUD-only outcome, death, or displacement",
+        "Choose the supported plan when its worst-case count is no greater",
+        "Information gain or a HUD-only change is not equivalent progress",
+        "record the action-cost and information tradeoff",
+        "stop the certified prefix before that action",
+        "only as the final action after a unanimously verified prefix, with no suffix",
+        "alone when the prefix is empty",
+        "Call it a discriminator only when executable rivals predict explicit distinct outcomes",
+    ):
+        assert applicability_gate in prompt
+
+    for noop_gate in (
+        "mark every complete rendered-successor prediction that predicted a conflicting spatial world-grid change as mismatched in this context",
+        "do not equate no observed effect with inapplicability or globally discard an effect rule supported elsewhere",
+        "unmet precondition or applicability constraint",
+        "false conditional-effect antecedent",
+        "observation aliasing, hidden change, or renderer error",
+        "only that no spatial world-grid effect was observed",
+        "the counter change remains transition evidence",
+        "neither observation by itself identifies which explanation is true",
+    ):
+        assert noop_gate in prompt
+
+    assert "eliminate candidates that predicted" not in prompt
+
+    for inherited_v11_rule in (
+        "produce an executable initialization certificate through two independent paths",
+        "write its final current-level signature under `runtime/model_scratch/`",
+        "every still-live, materially plausible, replay-consistent, decision-relevant candidate executable",
+        "Every non-final batched action requires version-space agreement",
+        "requires unavailable history-dependent state, commit one action",
+        "require an executable certificate for the exact suffix",
+    ):
+        assert inherited_v11_rule in prompt
