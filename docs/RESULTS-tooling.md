@@ -4,7 +4,7 @@ Status: active on `goal2`. No clean-game milestone is claimed yet.
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **72 passed**.
+- `uv run pytest -q`: **78 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
@@ -34,6 +34,7 @@ Security isolation was added as a non-negotiable validity prerequisite after adv
 | `/tmp/schema-live-bp35-modelgate2-5turn.gb3jxP` | Full-history provisional-model gate | Opus 4.8, low, 5 turns, 5 actions, **$3.1545** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. Matched to the click-proposal run except for the model gate; contaminated dev game. |
 | `/tmp/schema-live-bp35-modelgate2.gb3jxP` | Exploratory continuation of the model-gate run | Opus 4.8, low, 11 turns, 13 actions, **$8.2487** cumulative | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted across three resumptions; audit clean. Post-hoc horizon diagnostic, not a matched A/B; contaminated dev game. |
 | `/tmp/schema-live-bp35-topology.fvflDZ` | Translated-footprint topology report | Opus 4.8, low, 5 turns, 5 actions, **$2.1882** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. The report became available after turn 2 but was never requested, so this diagnoses delivery rather than gameplay impact. |
+| `/tmp/schema-live-bp35-delivery.eAlnC5` | One-way paired-movement readiness cue | Opus 4.8, low, 5 turns, 5 actions, **$1.1846** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. The agent never called history, so neither the cue nor final topology was delivered. |
 | `/tmp/schema-live-bp35-sol2.zD9mZf` | Codex driver + inspector smoke | GPT-5.6 Sol, xhigh, 3 turns, 4 actions | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. Different driver/model, so not part of the A/B. |
 
 The matched Opus run used 21 tools versus 45 at baseline (**53.3% fewer**) and `run_python` twice versus 12 times (**83.3% fewer**). Its measured cost was **29.5% lower**. It consumed the inspector on turns 2 and 4, backtested on four turns instead of one, and stayed in one Claude session instead of rolling over after every turn. These are strong ergonomic/context signals, but there was no gameplay gain and one replicate cannot establish causality.
@@ -68,7 +69,9 @@ On a fresh contaminated bp35 replay, the suffix appeared after actions `3,4`, be
 
 The matched live run read full history on turn 2, when only one direction had been observed. It then committed action `4`, making the reversible report available, but never read history again. Its five actions repeated the earlier control-probe, empty-click, object-click structure; it installed a model only on turn 4, backtested **3/3**, and ended at 0/9. The intervention therefore failed its delivery prerequisite rather than its causal route test. It cost **$2.1882**, 30.6% less than the model-gate control, but one stochastic replicate does not establish a cost effect.
 
-Full history now emits a separate one-line readiness cue after a unique, still-present one-way translation: after a paired/opposite movement probe, re-read full history for cross-transition structure. It disappears once paired evidence exists; paired evidence with a novel runway emits the original topology block. Offline bp35 replay locks the intended sequence (`3` → readiness; `4` → topology), while summary output, runner messages, schemas, prompts, execution, and BFS remain unchanged. A fresh matched live delivery-gate trial is pending the shared subscription slot.
+Full history then emitted a separate one-line readiness cue after a unique, still-present one-way translation: after a paired/opposite movement probe, re-read full history for cross-transition structure. It disappears once paired evidence exists; paired evidence with a novel runway emits the original topology block. Offline bp35 replay locks the intended sequence (`3` → readiness; `4` → topology), while summary output, runner messages, schemas, prompts, execution, and BFS remain unchanged.
+
+The matched cue run again failed the delivery prerequisite. Its action sequence was `3,4,7,7,click(20,38)`; the agent never called history, installed no model, and ended at 0/9. Because this was the second replicate in which final topology became available but was never requested, the durable follow-up is a narrow commit gate: when final topology first appears during the latest transition-producing turn, the next non-RESET action is rejected without state mutation until full history succeeds in that MCP session. Empty commits defer rather than erase the gate; RESET-first queues remain exempt, and inspector failures fail open. Tests cover transactional events, summary and invalid reads, mid-batch activation, empty deferral, one-time delivery, exact strings, and a real bp35 same-session stdio retry. The first matched launch hit a zero-token Claude session cap before inference and is discarded; a post-reset retry is pending.
 
 ## Validity hardening in this iteration
 
@@ -78,12 +81,13 @@ Full history now emits a separate one-line readiness cue after a unique, still-p
 - `run_backtest(start=...)` again emits the required `[range #a..#b]` prefix; all 14 public tool schemas remain unchanged.
 - Structured driver errors now stop after one turn, close with `run_finished`, and return nonzero instead of consuming the no-progress allowance. This was added after the second zero-token provider failure; its focused integration test and structured review are clean.
 - Live runners now acquire a nonblocking, per-user `flock` shared across worktrees. Overlap fails before environment initialization, and the lock releases on normal or exceptional exit. This mechanizes the repository's one-subscription-run rule; older already-running branches still require manual coordination.
-- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), live-run serialization **clean** (0.86), translated-footprint topology **clean** (0.82 after one accepted bounded-window fix), and one-way delivery cue **clean** (0.85).
+- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), live-run serialization **clean** (0.86), translated-footprint topology **clean** (0.82 after one accepted bounded-window fix), one-way delivery cue **clean** (0.85), and the hard topology gate **clean** (0.86 after accepted mid-batch and empty-deferral fixes).
 
 ## Clean-evaluation ledger
 
 - Discarded from clean evidence: any externally exposed trajectory details, and the concurrently running pre-existing game session.
 - `/tmp/schema-live-bp35-clicks.XzVOXO` was discarded as a provider-quota failure: three immediate session-limit exits, zero tokens/actions/cost, audit clean. It is not an experiment replicate.
 - `/tmp/schema-live-bp35-modelgate.PEiYiE` was discarded as an authentication failure: the cached Claude OAuth token had expired, producing three immediate 401 errors, zero tokens/actions/cost, and a clean audit. It contains no evidence about the model gate. Subsequent runner versions fail after the first such error.
+- `/tmp/schema-live-bp35-hardgate.CCUKlb` was discarded as a provider-limit failure: Claude reported a session cap on turn 1, with zero tokens/actions/cost and a clean audit. It contains no evidence about the hard gate.
 - Candidate held-out sequence: `tu93` plus a second untouched public game, after the next bp35 planner iteration.
 - M1–M3 remain unproven. Competitive held-out RHAE and two-game generalization are still required.
