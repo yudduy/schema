@@ -4,7 +4,7 @@ Status: active on `goal2`. No clean-game milestone is claimed yet.
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **68 passed**.
+- `uv run pytest -q`: **72 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
@@ -33,6 +33,7 @@ Security isolation was added as a non-negotiable validity prerequisite after adv
 | `/tmp/schema-live-bp35-horizon.cDEWER` | Click proposals + fair BFS, extended to 10 turns | Opus 4.8, low, 9 turns, 9 actions, **$4.2454** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. Stopped after the turn-9 cost pushed the run over its $4 cap; contaminated dev game. |
 | `/tmp/schema-live-bp35-modelgate2-5turn.gb3jxP` | Full-history provisional-model gate | Opus 4.8, low, 5 turns, 5 actions, **$3.1545** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. Matched to the click-proposal run except for the model gate; contaminated dev game. |
 | `/tmp/schema-live-bp35-modelgate2.gb3jxP` | Exploratory continuation of the model-gate run | Opus 4.8, low, 11 turns, 13 actions, **$8.2487** cumulative | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted across three resumptions; audit clean. Post-hoc horizon diagnostic, not a matched A/B; contaminated dev game. |
+| `/tmp/schema-live-bp35-topology.fvflDZ` | Translated-footprint topology report | Opus 4.8, low, 5 turns, 5 actions, **$2.1882** | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. The report became available after turn 2 but was never requested, so this diagnoses delivery rather than gameplay impact. |
 | `/tmp/schema-live-bp35-sol2.zD9mZf` | Codex driver + inspector smoke | GPT-5.6 Sol, xhigh, 3 turns, 4 actions | **0/9, 0.00% RHAE**; no completed level | Vendored scorer accepted; audit clean. Different driver/model, so not part of the A/B. |
 
 The matched Opus run used 21 tools versus 45 at baseline (**53.3% fewer**) and `run_python` twice versus 12 times (**83.3% fewer**). Its measured cost was **29.5% lower**. It consumed the inspector on turns 2 and 4, backtested on four turns instead of one, and stayed in one Claude session instead of rolling over after every turn. These are strong ergonomic/context signals, but there was no gameplay gain and one replicate cannot establish causality.
@@ -63,7 +64,11 @@ The extended model-gate run learned click effects and reached **12/12** replay, 
 
 The report activates only after a unique localized footprint makes a reversible translation chain, each action has one globally consistent vector, and the exact current appearance is unique. It erodes the observed underlay by the full footprint, checks swept occupancy between step anchors, and reports only an unvisited anchor whose orthogonal clearance exceeds every observed anchor. Current-level evidence is scoped after the latest RESET or level boundary and the latest 64 discrete observations bound runtime. Negative tests cover one-way evidence, no novel runway, duplicate movers, same-histogram movers, globally inconsistent action vectors, and the bounded-window seam.
 
-On a fresh contaminated bp35 replay, the suffix appeared after actions `3,4`, before any click: `footprint=5x5`, `step=6 columns`, and `action 4 ×4` from `(row=37,col=19)` to `(row=37,col=43)`, where three upward anchors were open versus zero at observed anchors. The preserved five-turn prefix produced the corresponding `action 4 ×5` route from column 13. This proves timely offline visibility, not agent use or score gain. A matched live Opus trial is pending the shared subscription-run slot.
+On a fresh contaminated bp35 replay, the suffix appeared after actions `3,4`, before any click: `footprint=5x5`, `step=6 columns`, and `action 4 ×4` from `(row=37,col=19)` to `(row=37,col=43)`, where three upward anchors were open versus zero at observed anchors. Executing that route produced three ordinary 47-cell translations followed by a **1,141-cell** passive-rise/camera transition. The preserved five-turn prefix produced the corresponding `action 4 ×5` route from column 13. This proves that the geometry identifies a dynamics-revealing context, but remains contaminated mechanism evidence.
+
+The matched live run read full history on turn 2, when only one direction had been observed. It then committed action `4`, making the reversible report available, but never read history again. Its five actions repeated the earlier control-probe, empty-click, object-click structure; it installed a model only on turn 4, backtested **3/3**, and ended at 0/9. The intervention therefore failed its delivery prerequisite rather than its causal route test. It cost **$2.1882**, 30.6% less than the model-gate control, but one stochastic replicate does not establish a cost effect.
+
+Full history now emits a separate one-line readiness cue after a unique, still-present one-way translation: after a paired/opposite movement probe, re-read full history for cross-transition structure. It disappears once paired evidence exists; paired evidence with a novel runway emits the original topology block. Offline bp35 replay locks the intended sequence (`3` → readiness; `4` → topology), while summary output, runner messages, schemas, prompts, execution, and BFS remain unchanged. A fresh matched live delivery-gate trial is pending the shared subscription slot.
 
 ## Validity hardening in this iteration
 
@@ -73,7 +78,7 @@ On a fresh contaminated bp35 replay, the suffix appeared after actions `3,4`, be
 - `run_backtest(start=...)` again emits the required `[range #a..#b]` prefix; all 14 public tool schemas remain unchanged.
 - Structured driver errors now stop after one turn, close with `run_finished`, and return nonzero instead of consuming the no-progress allowance. This was added after the second zero-token provider failure; its focused integration test and structured review are clean.
 - Live runners now acquire a nonblocking, per-user `flock` shared across worktrees. Overlap fails before environment initialization, and the lock releases on normal or exceptional exit. This mechanizes the repository's one-subscription-run rule; older already-running branches still require manual coordination.
-- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), live-run serialization **clean** (0.86), and translated-footprint topology **clean** (0.82 after one accepted bounded-window fix).
+- Structured Codex autoreviews (GPT-5.5, high): privacy boundary **clean** (0.82), corrected click proposer **clean** (0.87), candidate-major BFS scheduler **clean** (0.86), provider fail-fast **clean** (0.83), live-run serialization **clean** (0.86), translated-footprint topology **clean** (0.82 after one accepted bounded-window fix), and one-way delivery cue **clean** (0.85).
 
 ## Clean-evaluation ledger
 
