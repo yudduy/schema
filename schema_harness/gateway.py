@@ -749,6 +749,25 @@ class PersistentGateway:
         record = self._ledger["turns"].get(turn_id)
         return isinstance(record, dict) and record.get("phase") == "COMPLETE"
 
+    def latest_completed_turn_start(self) -> int | None:
+        """Return the timeline index before the latest turn that added transitions."""
+
+        timeline_end = len(self.gateway.timeline)
+        candidates: list[tuple[int, int, int]] = []
+        for order, record in enumerate(self._ledger["turns"].values()):
+            if not isinstance(record, dict) or record.get("phase") != "COMPLETE":
+                continue
+            start = record.get("pre_step_index")
+            end = record.get("post_step_index")
+            turn = record.get("turn")
+            if (
+                type(start) is int
+                and type(end) is int
+                and 0 <= start < end == timeline_end
+            ):
+                candidates.append((turn if type(turn) is int else -1, order, start))
+        return max(candidates)[2] if candidates else None
+
     def _after_commit_durable(self, turn_id: str) -> None:
         """Fault-injection seam: COMMIT_DURABLE is fsynced before this hook runs."""
 

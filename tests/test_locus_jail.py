@@ -12,7 +12,13 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from schema_harness.locus import LOCK_MESSAGE, LocusService, mcp
+from schema_harness.locus import (
+    COMMIT_MESSAGE,
+    CROSS_TRANSITION_GATE_MESSAGE,
+    LOCK_MESSAGE,
+    LocusService,
+    mcp,
+)
 
 
 class FakeEnvironment:
@@ -513,6 +519,145 @@ def test_read_history_summary_remains_appendix_free(tmp_path):
     )
 
 
+def test_cross_transition_gate_is_transactional_and_full_history_unlocks(
+    monkeypatch,
+    tmp_path,
+):
+    events = tmp_path / "events.jsonl"
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path, events_path=events) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        assert service._committed is False
+        assert service.last_result is None
+        assert service.gateway.timeline == ()
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert [record["kind"] for record in records] == [
+            "tool_started",
+            "tool_finished",
+        ]
+        assert records[-1]["output"] == CROSS_TRANSITION_GATE_MESSAGE
+        assert records[-1]["is_error"] is False
+
+        service.read_history(detail="summary")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        with pytest.raises(ValueError, match="detail must be"):
+            service.read_history(detail="bad")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert not any(
+            record["kind"] in {"turn_committed", "action_taken"}
+            for record in records
+        )
+
+        service.read_history(detail="full")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+        assert service.last_result is not None
+        assert service.last_result.executed == 1
+        assert service.commit_actions([{"action": 3}], "again") == LOCK_MESSAGE
+
+    records = [json.loads(line) for line in events.read_text().splitlines()]
+    assert sum(record["kind"] == "turn_committed" for record in records) == 1
+    assert sum(record["kind"] == "action_taken" for record in records) == 1
+
+
+@pytest.mark.parametrize(
+    ("actions", "count"),
+    [([], 0), ([{"action": 0}, {"action": 3}], 2)],
+)
+def test_cross_transition_gate_exempts_empty_and_reset_first_queues(
+    monkeypatch,
+    tmp_path,
+    actions,
+    count,
+):
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path) as service:
+        assert service.commit_actions(actions, "reset or stop") == (
+            COMMIT_MESSAGE.format(count=count)
+        )
+
+
+def test_cross_transition_gate_fails_open_on_inspector_error(monkeypatch, tmp_path):
+    def fail(_service):
+        raise RuntimeError("inspector failed")
+
+    monkeypatch.setattr(LocusService, "_new_affordance_topology", fail)
+    with _service(tmp_path) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
+def test_cross_transition_gate_covers_mid_batch_activation_only_once(
+    monkeypatch,
+    tmp_path,
+):
+    source = (
+        "def step(grid, action, x=None, y=None):\n"
+        "    return [[value + 1 for value in row] for row in grid], {}\n"
+    )
+    monkeypatch.setattr(
+        "schema_harness.locus.describe_actor_affordances",
+        lambda _initial, frames: "topology" if len(frames) >= 2 else None,
+    )
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}, {"action": 3}],
+            "seed one batch",
+        ) == COMMIT_MESSAGE.format(count=3)
+        assert service.last_result is not None
+        assert service.last_result.executed == 3
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([], "defer") == COMMIT_MESSAGE.format(count=0)
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-3",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        service.read_history(detail="full")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-4",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "already delivered") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
 def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
     (tmp_path / "notes.md").write_text("ok\n", encoding="utf-8")
     repo = Path(__file__).resolve().parents[1]
@@ -547,3 +692,67 @@ def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
     assert result.isError is False
     assert result.content[0].text.endswith("1\tok")
     assert "Successfully loaded game class" in (tmp_path / "stderr.log").read_text()
+
+
+def test_stdio_cross_transition_gate_unlocks_with_full_history_in_same_session(
+    monkeypatch,
+    tmp_path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    environments = repo / "environment_files"
+    if not environments.is_dir():
+        environments = tmp_path / "environments"
+    monkeypatch.setenv("SCHEMA_ENVIRONMENTS_DIR", str(environments))
+    game = "bp35-0a0ad940"
+    with LocusService(tmp_path, game, "turn-1") as service:
+        assert service.commit_actions([{"action": 3}], "seed left") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+    with LocusService(tmp_path, game, "turn-2") as service:
+        assert service.commit_actions([{"action": 4}], "seed right") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    environment = dict(os.environ)
+    environment.update(
+        PYTHONPATH=str(repo),
+        LOCUS_WORKDIR=str(tmp_path),
+        LOCUS_GAME=game,
+        LOCUS_TURN_ID="turn-3",
+        LOCUS_TURN="3",
+        LOCUS_EVENTS=str(tmp_path / "events.jsonl"),
+    )
+    environment.setdefault("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "schema_harness.locus"],
+        env=environment,
+        cwd=tmp_path,
+    )
+
+    async def exercise_server():
+        with (tmp_path / "stderr.log").open("w", encoding="utf-8") as errors:
+            async with stdio_client(parameters, errlog=errors) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    rejected = await session.call_tool(
+                        "commit_actions",
+                        {"actions": [{"action": 7}], "reason": "probe"},
+                    )
+                    history = await session.call_tool(
+                        "read_history",
+                        {"detail": "full"},
+                    )
+                    committed = await session.call_tool(
+                        "commit_actions",
+                        {"actions": [{"action": 7}], "reason": "probe"},
+                    )
+        return rejected, history, committed
+
+    rejected, history, committed = asyncio.run(exercise_server())
+    assert rejected.isError is False
+    assert rejected.content[0].text == CROSS_TRANSITION_GATE_MESSAGE
+    assert history.isError is False
+    assert "Translated-footprint topology" in history.content[0].text
+    assert committed.isError is False
+    assert committed.content[0].text == COMMIT_MESSAGE.format(count=1)

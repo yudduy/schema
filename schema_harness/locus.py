@@ -68,6 +68,11 @@ _HARNESS_PRIVATE_RUNTIME_FILES = frozenset(
 )
 LOCK_MESSAGE = "Already committed this turn — end your turn now."
 COMMIT_MESSAGE = "Committed {count} action(s). Stop now — end your turn, do not call more tools."
+CROSS_TRANSITION_GATE_MESSAGE = (
+    "Cross-transition gate: a newly supported structural context is available. "
+    'Call read_history(detail="full") before committing; no action was taken, and '
+    "you may retry this turn."
+)
 _MODEL_PATTERN = re.compile(r"world_model_v\d+\.py")
 _T = TypeVar("_T")
 _STDOUT_REDIRECT_LOCK = threading.RLock()
@@ -246,6 +251,7 @@ class LocusService:
         else:
             self.gateway = gateway
         self._committed = self.gateway.is_turn_complete(turn_id)
+        self._full_history_read = False
         self.last_result: ExecutionResult | None = None
 
     def close(self) -> None:
@@ -604,6 +610,20 @@ class LocusService:
                 rejected=True,
             )
         queue = tuple(QueuedAction.parse(action) for action in actions)
+        if queue and queue[0].action != 0 and not self._full_history_read:
+            try:
+                new_topology = self._new_affordance_topology()
+            except Exception:
+                # Inspector failure must never make real actions impossible.
+                new_topology = None
+            if new_topology is not None:
+                return self._finished(
+                    call_id,
+                    "commit_actions",
+                    args,
+                    CROSS_TRANSITION_GATE_MESSAGE,
+                    rejected=True,
+                )
         output = COMMIT_MESSAGE.format(count=len(queue))
         self._committed = True
         # Match the released ordering: the tool call finishes before the durable
@@ -777,6 +797,41 @@ class LocusService:
 
         return str(self._invoke("run_bfs", args, operation))
 
+    def _affordance_context(
+        self,
+    ) -> tuple[list[list[int]], list[tuple[int, list[list[int]]]], int]:
+        timeline = self.gateway.timeline
+        level_initial = self.gateway.gateway.initial_grid
+        level_start = 0
+        for position, item in enumerate(timeline):
+            if item.action == 0 or item.level_up:
+                level_initial = item.grid
+                level_start = position + 1
+        observations = [(item.action, item.grid) for item in timeline[level_start:]]
+        return level_initial, observations, level_start
+
+    def _affordance_advisory(self) -> str | None:
+        level_initial, observations, _ = self._affordance_context()
+        topology = describe_actor_affordances(level_initial, observations)
+        if topology is not None:
+            return topology
+        return pending_actor_affordance_hint(level_initial, observations)
+
+    def _new_affordance_topology(self) -> str | None:
+        level_initial, observations, level_start = self._affordance_context()
+        turn_start = self.gateway.latest_completed_turn_start()
+        if not observations or turn_start is None:
+            return None
+        topology = describe_actor_affordances(level_initial, observations)
+        if topology is None:
+            return None
+        prior_length = max(0, turn_start - level_start)
+        prior = describe_actor_affordances(
+            level_initial,
+            observations[:prior_length],
+        )
+        return topology if prior is None else None
+
     def read_history(
         self,
         indices: list[int] | None = None,
@@ -856,25 +911,9 @@ class LocusService:
             )
             if inspector_records:
                 appendix += "\n" + "\n".join(inspector_records)
-            level_initial = initial
-            level_start = 0
-            for position, item in enumerate(timeline):
-                if item.action == 0 or item.level_up:
-                    level_initial = item.grid
-                    level_start = position + 1
-            level_observations = [
-                (item.action, item.grid) for item in timeline[level_start:]
-            ]
-            topology = describe_actor_affordances(level_initial, level_observations)
-            if topology is not None:
-                appendix += "\n" + topology
-            else:
-                pending_topology = pending_actor_affordance_hint(
-                    level_initial,
-                    level_observations,
-                )
-                if pending_topology is not None:
-                    appendix += "\n" + pending_topology
+            affordance_advisory = self._affordance_advisory()
+            if affordance_advisory is not None:
+                appendix += "\n" + affordance_advisory
             if timeline and self.gateway.live_model_path() is None:
                 unit = "transition" if len(timeline) == 1 else "transitions"
                 appendix += (
@@ -893,7 +932,10 @@ class LocusService:
                 )
             return result + "\n" + appendix
 
-        return str(self._invoke("read_history", args, operation))
+        output = self._invoke("read_history", args, operation)
+        if detail == "full" and output != LOCK_MESSAGE:
+            self._full_history_read = True
+        return str(output)
 
     def _run_process(
         self,
@@ -1380,6 +1422,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "COMMIT_MESSAGE",
+    "CROSS_TRANSITION_GATE_MESSAGE",
     "LOCK_MESSAGE",
     "LocusService",
     "commit_actions",
