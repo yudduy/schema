@@ -175,6 +175,25 @@ The level-4 overlap recurrence gives the next distribution: retain v14's context
 
 The level-5 false impossibility claim shifts the distribution to a completeness-preserving reachability certificate 41%, measure v14 unchanged 28%, prescribe inverse-dynamics staging search 15%, mandate generic BFS 9%, and only increase the timeout 7%. V15 selects only the certificate. The live agent searched direct cargo and socket hits, omitted arbitrary staging placements, and concluded that the established mechanics could not solve the level; an independent staged witness refuted that conclusion without a new mechanic. This is the classic unsafe helpful-action failure: FF reports that immediate relaxed-plan actions can exclude prerequisite-setting moves and prune every real solution, so it retains an unpruned complete fallback ([Hoffmann and Nebel, 2001](https://jair.org/index.php/jair/article/view/10276)). Completeness-preserving stubborn-set pruning instead requires plan-preservation closure over landmarks, enabling actions, and interference ([Wehrle et al., 2013](https://ojs.aaai.org/index.php/ICAPS/article/view/13565)); a sound unsolvability certificate must exclude goals and remain closed under every applicable operator ([Eriksson, Röger, and Helmert, 2017](https://ojs.aaai.org/index.php/ICAPS/article/view/13818)). V15 therefore permits restricted searches for ordering but makes them report `UNKNOWN`; only all-action exhaustion or mechanically verified dominance/closure may support `IMPOSSIBLE`. It does not select the more prescriptive inverse solver, a generic BFS requirement, or an operational timeout change.
 
+## Pre-registered M3 Validation
+
+After the r11l v9 M2 attempt ends, frozen v15 will be measured serially on `cd82-fb555c5d` and then `ft09-0d8bbf25`. Their human level-action baselines are `55/8/41/21/23/23` (171 total) and `43/12/23/28/65/37` (208 total). Neither game has a known prior project run, and each first invocation must prove an empty workdir. The fixed method identity is prompt SHA-256 `a9860a5c8245a734afb3e5f2d802a9b6745d62b72eeaf7d49000dc905631d3fd` plus `schema_harness` tree `496abf464213baa7d12bc55db4060b8f4e4fb464`; documentation-only commits may occur between games, but any harness-tree or prompt-byte change invalidates the pair.
+
+Each game must finish `WIN`, clear 6/6 levels, score RHAE at least 90.00%, pass the anti-cheat guard, retain contiguous event and action indices, end with a `WIN` gateway state and no incomplete ledger turn, and match the frozen source/snapshot/metadata hash. Runs use `claude-fable-5`, effort `max`, a 1,200-second turn timeout, 3,000 actions, 12 turns per invocation, $7.50 turn and $36 invocation cost caps, three no-progress turns, and 150,000-token context rollover. A capped continuation may resume the same workdir with exactly those settings; a reset or fresh rerun after observing the game cannot replace the original measurement. Process preflight must show no other harness runner before launch, and any later overlap is disclosed rather than called concurrency-controlled evidence.
+
+The command template is:
+
+```bash
+ONLY_RESET_LEVELS=true uv run python -m schema_harness.runner \
+  --game GAME --model claude-fable-5 --effort max --turn-timeout 1200 \
+  --max-actions 3000 --max-turns 12 --turn-cost-cap 7.5 --run-cost-cap 36 \
+  --no-progress-turns 3 --context-rollover-tokens 150000 \
+  --system-prompt-file schema_harness/prompts/physicist_v15_reachability_certificate.md \
+  --workdir FRESH_WORKDIR
+```
+
+Both passes are required for M3. Scoring will stage the two distinct trajectories once each under the vendored scorer, never duplicate one run across dataset trees. The later 25-game sweep retains the stronger approximately 99% aggregate replication target; that aggregate target is not substituted for this per-game generalization gate.
+
 ## Status and Uncertainty
 
 M0 and M1 are proven. The contaminated development gate passes, and frozen v9 has cleared the first five untouched r11l levels in `10/14/11/15/20` actions while restoring exact retrospective replay before every winning suffix. M2 is not yet satisfied: the same live trajectory is active on level 5 with one level remaining. V15 is the current frozen candidate but has no live result; after the v9 M2 attempt, it must clear two untouched games unchanged before any generalization claim. Only then should the same frozen method enter the full sweep and any ~99% reproduction comparison.
