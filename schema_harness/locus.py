@@ -234,6 +234,7 @@ class LocusService:
         bfs_timeout: float = 30,
         clock: Callable[[], float] = time.time,
         debug_log: str | os.PathLike[str] | None = None,
+        experimental_tooling: bool | None = None,
     ) -> None:
         self.workdir = Path(workdir).resolve()
         if Path(_REPO_ROOT).is_relative_to(self.workdir):
@@ -245,6 +246,14 @@ class LocusService:
         self.process_timeout = process_timeout
         self.bfs_timeout = bfs_timeout
         self.debug_log = Path(debug_log) if debug_log else None
+        if experimental_tooling is None:
+            configured = os.environ.get("SCHEMA_EXPERIMENTAL_TOOLING", "false")
+            if configured not in {"true", "false"}:
+                raise ValueError(
+                    "SCHEMA_EXPERIMENTAL_TOOLING must be exactly 'true' or 'false'"
+                )
+            experimental_tooling = configured == "true"
+        self.experimental_tooling = experimental_tooling
         self._owns_event_log = event_log is None and events_path is not None
         self.event_log = event_log
         if self.event_log is None and events_path is not None:
@@ -624,29 +633,30 @@ class LocusService:
         queue = tuple(QueuedAction.parse(action) for action in actions)
         has_non_reset = any(action.action != 0 for action in queue)
         gate_messages: list[str] = []
-        if queue and queue[0].action != 0 and not self._full_history_read:
-            try:
-                new_topology = self._new_affordance_topology()
-            except Exception:
-                # Inspector failure must never make real actions impossible.
-                new_topology = None
-            if new_topology is not None:
-                gate_messages.append(CROSS_TRANSITION_GATE_MESSAGE)
-        needs_model_repair = (
-            has_non_reset
-            and self.gateway.latest_completed_turn_needs_model_repair()
-        )
-        if needs_model_repair:
-            repair_report = self._model_repair_report()
-            if repair_report is not None:
-                gate_messages.append(MODEL_REPAIR_GATE_MESSAGE + "\n" + repair_report)
-        if self.gateway.live_model_path() is not None:
-            reset_seen = False
-            for action in queue:
-                reset_seen = reset_seen or action.action == 0
-                if reset_seen and action.action != 0:
-                    gate_messages.append(RESET_BOUNDARY_GATE_MESSAGE)
-                    break
+        if self.experimental_tooling:
+            if queue and queue[0].action != 0 and not self._full_history_read:
+                try:
+                    new_topology = self._new_affordance_topology()
+                except Exception:
+                    # Inspector failure must never make real actions impossible.
+                    new_topology = None
+                if new_topology is not None:
+                    gate_messages.append(CROSS_TRANSITION_GATE_MESSAGE)
+            needs_model_repair = (
+                has_non_reset
+                and self.gateway.latest_completed_turn_needs_model_repair()
+            )
+            if needs_model_repair:
+                repair_report = self._model_repair_report()
+                if repair_report is not None:
+                    gate_messages.append(MODEL_REPAIR_GATE_MESSAGE + "\n" + repair_report)
+            if self.gateway.live_model_path() is not None:
+                reset_seen = False
+                for action in queue:
+                    reset_seen = reset_seen or action.action == 0
+                    if reset_seen and action.action != 0:
+                        gate_messages.append(RESET_BOUNDARY_GATE_MESSAGE)
+                        break
         if gate_messages:
             return self._finished(
                 call_id,
@@ -960,6 +970,8 @@ class LocusService:
                     f"level_up={item.level_up} dead={item.dead} win={item.win}"
                 )
             result = summary + "; detail=full: " + (" | ".join(details) or "(none)")
+            if not self.experimental_tooling:
+                return result
             inspected = selected[-8:]
             inspector_records: list[str] = []
             for item in inspected:

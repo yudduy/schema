@@ -143,7 +143,9 @@ CODEX_DRIVER_POLICY = (
 )
 
 
-def _codex_policy_config_digest(*, model: str, effort: str) -> str:
+def _codex_policy_config_digest(
+    *, model: str, effort: str, experimental_tooling: bool
+) -> str:
     """Identify the static, security-relevant portion of the Codex boundary."""
 
     payload = {
@@ -156,6 +158,7 @@ def _codex_policy_config_digest(*, model: str, effort: str) -> str:
         "auto_compact_token_limit": DEFAULT_CODEX_COMPACT_TOKENS,
         "disabled_features": list(_CODEX_DISABLED_FEATURES),
         "enabled_locus_tools": list(CODEX_LOCUS_TOOLS),
+        "experimental_tooling": experimental_tooling,
         "driver_policy": CODEX_DRIVER_POLICY,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -386,6 +389,7 @@ def initialize_workdir(
     max_actions: int,
     effort: str | None = None,
     system_prompt_file: str | os.PathLike[str] | None = None,
+    experimental_tooling: bool = False,
 ) -> tuple[Path, GatewaySnapshot]:
     """Create durable run files without replacing agent-authored notes or models."""
 
@@ -422,6 +426,10 @@ def initialize_workdir(
             )
         if existing.get("system_prompt_sha256") != prompt_digest:
             raise ValueError("workdir was created with a different system prompt")
+        if existing.get("experimental_tooling") is not experimental_tooling:
+            raise ValueError(
+                "workdir was created with a different experimental-tooling mode"
+            )
 
     notes = root / "notes.md"
     if not notes.exists():
@@ -463,6 +471,7 @@ def initialize_workdir(
         "started_at": time.time(),
         "system_prompt": "method_prompt.md" if prompt_digest else None,
         "system_prompt_sha256": prompt_digest,
+        "experimental_tooling": experimental_tooling,
     }
     if not run_path.exists():
         _atomic_json(run_path, metadata)
@@ -473,6 +482,7 @@ def initialize_workdir(
         turn=initial_turn,
         turn_id=f"turn-{initial_turn:06d}",
         max_actions=max_actions,
+        experimental_tooling=experimental_tooling,
     )
     return root, snapshot
 
@@ -614,6 +624,7 @@ def write_mcp_config(
     turn: int,
     turn_id: str,
     max_actions: int,
+    experimental_tooling: bool = False,
 ) -> Path:
     """Write the strict one-server MCP config inherited by the headless driver."""
 
@@ -623,6 +634,7 @@ def write_mcp_config(
         turn=turn,
         turn_id=turn_id,
         max_actions=max_actions,
+        experimental_tooling=experimental_tooling,
     )
     config = {
         "mcpServers": {
@@ -645,6 +657,7 @@ def _locus_environment(
     turn: int,
     turn_id: str,
     max_actions: int,
+    experimental_tooling: bool = False,
 ) -> dict[str, str]:
     """Return the exact environment required by the isolated Locus server."""
 
@@ -661,6 +674,9 @@ def _locus_environment(
         "LOCUS_MAX_ACTIONS": str(max_actions),
         "LOCUS_EVENTS": str(workdir / "events.jsonl"),
         "LOCUS_LOG": str(workdir / "runtime" / "locus.jsonl"),
+        "SCHEMA_EXPERIMENTAL_TOOLING": (
+            "true" if experimental_tooling else "false"
+        ),
         # Claude needs the OAuth token; the spawned MCP/tool subprocesses do not.
         "CLAUDE_CODE_OAUTH_TOKEN": "",
     }
@@ -812,6 +828,7 @@ def run_dry(args: argparse.Namespace) -> int:
         model="scripted-agent",
         max_actions=args.max_actions,
         system_prompt_file=args.system_prompt_file,
+        experimental_tooling=args.experimental_tooling,
     )
     start_history_len = _run_started(
         workdir,
@@ -836,6 +853,7 @@ def run_dry(args: argparse.Namespace) -> int:
         turn=turn,
         max_actions=args.max_actions,
         events_path=workdir / "events.jsonl",
+        experimental_tooling=args.experimental_tooling,
     ) as service:
         text = ScriptedAgent().run(message, service)
     with EventLog(workdir / "events.jsonl", clock=time.time) as event_log:
@@ -1148,6 +1166,7 @@ def _record_codex_metadata(
     only_reset_levels: str | None,
     model: str,
     effort: str,
+    experimental_tooling: bool,
 ) -> None:
     path = workdir / "run.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1161,7 +1180,9 @@ def _record_codex_metadata(
         "enabled_locus_tools": list(CODEX_LOCUS_TOOLS),
         "driver_policy_sha256": hashlib.sha256(CODEX_DRIVER_POLICY.encode()).hexdigest(),
         "policy_config_sha256": _codex_policy_config_digest(
-            model=model, effort=effort
+            model=model,
+            effort=effort,
+            experimental_tooling=experimental_tooling,
         ),
         "native_image_input": False,
         "usd_cost_available": False,
@@ -1171,6 +1192,7 @@ def _record_codex_metadata(
         "run_token_cap": run_token_cap,
         "no_progress_turns": no_progress_turns,
         "only_reset_levels": only_reset_levels,
+        "experimental_tooling": experimental_tooling,
     }
     existing = payload.get("driver")
     if existing is not None and existing != driver:
@@ -1227,6 +1249,7 @@ def _codex_command(
     session_id: str = "",
     resume: bool = False,
     tool_timeout: int = 1200,
+    experimental_tooling: bool = False,
 ) -> list[str]:
     """Construct a strict new or resumed Codex invocation for one Locus turn."""
 
@@ -1262,6 +1285,7 @@ def _codex_command(
         turn=turn,
         turn_id=turn_id,
         max_actions=max_actions,
+        experimental_tooling=experimental_tooling,
     )
     developer_instructions = f"{method_prompt.rstrip()}\n\n{CODEX_DRIVER_POLICY}\n"
     overrides: list[tuple[str, Any]] = [
@@ -1512,6 +1536,7 @@ def run_codex_turn(
     resume: bool,
     timeout: int,
     system_prompt_file: Path | None,
+    experimental_tooling: bool = False,
 ) -> dict[str, Any]:
     """Run one Codex turn and persist its raw private driver transcript."""
 
@@ -1537,6 +1562,7 @@ def run_codex_turn(
         session_id=session_id,
         resume=resume,
         tool_timeout=timeout,
+        experimental_tooling=experimental_tooling,
     )
     process = subprocess.Popen(
         command,
@@ -1689,6 +1715,7 @@ def _run_live(args: argparse.Namespace) -> int:
         max_actions=args.max_actions,
         effort=args.effort,
         system_prompt_file=args.system_prompt_file,
+        experimental_tooling=args.experimental_tooling,
     )
     token: str | None = None
     codex_home: Path | None = None
@@ -1724,6 +1751,7 @@ def _run_live(args: argparse.Namespace) -> int:
             only_reset_levels="true",
             model=args.model,
             effort=args.effort,
+            experimental_tooling=args.experimental_tooling,
         )
         saved_session = load_driver_session(
             workdir, provider=args.provider, model=args.model
@@ -1797,6 +1825,7 @@ def _run_live(args: argparse.Namespace) -> int:
             turn=turn,
             turn_id=turn_id,
             max_actions=args.max_actions,
+            experimental_tooling=args.experimental_tooling,
         )
         method_prompt = _verified_method_prompt(workdir, prompt_digest)
         if args.provider == "claude":
@@ -1832,6 +1861,7 @@ def _run_live(args: argparse.Namespace) -> int:
                 resume=resume,
                 timeout=args.turn_timeout,
                 system_prompt_file=method_prompt,
+                experimental_tooling=args.experimental_tooling,
             )
         if result is None:
             result = {
@@ -2044,6 +2074,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="disable the standing method prompt for an ablation run",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--experimental-tooling",
+        action="store_true",
+        help="enable unproven inspector appendices and commit gates",
+    )
     args = parser.parse_args(argv)
     args.game = canonical_game_id(args.game)
     if args.provider is None:

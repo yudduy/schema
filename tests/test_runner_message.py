@@ -113,6 +113,7 @@ def test_mcp_config_is_strictly_one_locus_server_with_turn_environment(tmp_path)
     assert server["env"]["LOCUS_TURN_ID"] == "turn-000007"
     assert server["env"]["LOCUS_TURN"] == "7"
     assert server["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == ""
+    assert server["env"]["SCHEMA_EXPERIMENTAL_TOOLING"] == "false"
 
 
 def test_fresh_rollover_session_reinjects_notes_and_file_map(tmp_path):
@@ -358,6 +359,20 @@ def test_default_live_provider_is_luna_max(tmp_path):
     assert args.provider == "codex"
     assert args.model == "gpt-5.6-luna"
     assert args.effort == "max"
+    assert args.experimental_tooling is False
+
+
+def test_experimental_tooling_requires_explicit_flag(tmp_path):
+    args = parse_args(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--no-system-prompt",
+            "--experimental-tooling",
+        ]
+    )
+
+    assert args.experimental_tooling is True
 
 
 def test_claude_model_infers_provider_for_legacy_commands(tmp_path):
@@ -477,6 +492,10 @@ def test_codex_command_is_persistent_read_only_and_locus_only(monkeypatch, tmp_p
         in overrides
     )
     assert 'mcp_servers.locus.env.ONLY_RESET_LEVELS="true"' in overrides
+    assert (
+        'mcp_servers.locus.env.SCHEMA_EXPERIMENTAL_TOOLING="false"'
+        in overrides
+    )
     assert (
         "mcp_servers.locus.env.PYTHONPATH="
         + json.dumps(
@@ -972,6 +991,16 @@ def test_workdir_rejects_provider_model_and_action_cap_drift(tmp_path):
             max_actions=11,
             system_prompt_file=None,
         )
+    with pytest.raises(ValueError, match="experimental-tooling"):
+        runner_module.initialize_workdir(
+            workdir,
+            game="bp35-0a0ad940",
+            provider="claude",
+            model="claude-test",
+            max_actions=10,
+            system_prompt_file=None,
+            experimental_tooling=True,
+        )
 
 
 def test_session_checkpoint_is_provider_and_model_bound(tmp_path):
@@ -1280,6 +1309,7 @@ def test_codex_metadata_records_and_freezes_security_boundary(tmp_path):
         "only_reset_levels": "true",
         "model": "gpt-5.6-luna",
         "effort": "max",
+        "experimental_tooling": False,
     }
 
     runner_module._record_codex_metadata(tmp_path, **arguments)
@@ -1289,6 +1319,7 @@ def test_codex_metadata_records_and_freezes_security_boundary(tmp_path):
     assert driver["ephemeral_turns"] is False
     assert driver["disabled_features"] == list(runner_module._CODEX_DISABLED_FEATURES)
     assert driver["enabled_locus_tools"] == list(runner_module.CODEX_LOCUS_TOOLS)
+    assert driver["experimental_tooling"] is False
     assert len(driver["driver_policy_sha256"]) == 64
     assert len(driver["policy_config_sha256"]) == 64
     runner_module._record_codex_metadata(tmp_path, **arguments)

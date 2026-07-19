@@ -23,6 +23,13 @@ from schema_harness.locus import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_legacy_experimental_tooling(monkeypatch):
+    """Keep existing intervention tests explicit while production defaults to core."""
+
+    monkeypatch.setenv("SCHEMA_EXPERIMENTAL_TOOLING", "true")
+
+
 class FakeEnvironment:
     def __init__(self) -> None:
         self.counter = 0
@@ -528,6 +535,35 @@ def test_read_history_summary_remains_appendix_free(tmp_path):
         "resets(action0)=0 clicks(action6)=0; by-action={3: 1}; "
         "max_level=0; showing indices [0, 0] -> 1 steps."
     )
+
+
+def test_faithful_core_omits_history_appendix_and_commit_gates(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path, experimental_tooling=False) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+        experimental_tooling=False,
+    ) as service:
+        output = service.read_history(detail="full")
+
+    assert "Inspector:" not in output
+    assert "Model gate:" not in output
+    assert "click target proposals" not in output
+    assert "Cross-transition" not in output
 
 
 def test_cross_transition_gate_is_transactional_and_full_history_unlocks(
