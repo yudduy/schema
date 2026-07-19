@@ -273,11 +273,13 @@ The exact-session continuation reached the 21-action cap on level 0. The final a
 
 No fourth BP35 prompt is selected. Three clean Luna treatments—v9, v9 plus intent grounding, and concise core—each ended at 0/9 after 21 actions while restoring exact replay. Repeated tuning on a contaminated development game now has more overfitting risk than information value. V9 remains the only method with substantive positive live evidence from r11l, so the next experiment is unchanged v9 on fresh CD82 and then SC25 coverage. This tests the user's coverage hypothesis without promoting a failed BP35 treatment; it does not imply that v9/Luna passed the development gate.
 
+The unchanged-v9 pair is pre-registered before either game begins. CD82 uses workdir `/private/tmp/schema-v9-cd82.Arp4v7` and audit dir `/private/tmp/schema-v9-cd82-audit.wcx6eW`; SC25 uses `/private/tmp/schema-v9-sc25.CVv6Qj` and `/private/tmp/schema-v9-sc25-audit.s8tvyA`. Prompt SHA-256 remains `d77045dd…`. Adapter `/private/tmp/schema-luna-driver-v9-current.py`, SHA-256 `f178b9cc…`, differs from the audited v9 adapter only by its identity and current harness-tree hash `5861e90e…`; the added, unselected prompt files do not enter the measured workdir. Each game uses Luna Max, 3,000 actions, 12 turns per invocation, three no-progress turns, native compaction at 240,000 tokens, the published 14-tool surface, exact-session continuation, and fresh disjoint directories. Each independently passes only with `WIN`, 6/6 levels, RHAE at least 90.00%, and clean scorer, guard, sequence, gateway, ledger, session, prompt, and adapter audits. CD82's prior v15 attempt contained zero reasoning, tools, or actions; SC25 has not been run locally. No prompt or runtime change is permitted between the pair, even if CD82 fails.
+
 ```bash
 env -u DISABLE_AUTO_COMPACT ONLY_RESET_LEVELS=true \
-uv run python /private/tmp/schema-luna-driver-v1.py \
+uv run python /private/tmp/schema-luna-driver-v9-current.py \
   --game GAME --model gpt-5.6-luna --effort max \
-  --max-actions ACTION_LIMIT --max-turns 12 --no-progress-turns 3 \
+  --max-actions 3000 --max-turns 12 --no-progress-turns 3 \
   --auto-compact-tokens 240000 \
   --system-prompt-file schema_harness/prompts/physicist_v9_matched_transfer.md \
   --workdir FRESH_WORKDIR --audit-dir FRESH_EXTERNAL_AUDIT_DIR
