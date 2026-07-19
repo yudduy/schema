@@ -196,7 +196,9 @@ The level-4 overlap recurrence gives the next distribution: retain v14's context
 
 The level-5 false impossibility claim shifts the distribution to a completeness-preserving reachability certificate 41%, measure v14 unchanged 28%, prescribe inverse-dynamics staging search 15%, mandate generic BFS 9%, and only increase the timeout 7%. V15 selects only the certificate. The live agent searched direct cargo and socket hits, omitted arbitrary staging placements, and concluded that the established mechanics could not solve the level; an independent staged witness refuted that conclusion without a new mechanic. This is the classic unsafe helpful-action failure: FF reports that immediate relaxed-plan actions can exclude prerequisite-setting moves and prune every real solution, so it retains an unpruned complete fallback ([Hoffmann and Nebel, 2001](https://jair.org/index.php/jair/article/view/10276)). Completeness-preserving stubborn-set pruning instead requires plan-preservation closure over landmarks, enabling actions, and interference ([Wehrle et al., 2013](https://ojs.aaai.org/index.php/ICAPS/article/view/13565)); a sound unsolvability certificate must exclude goals and remain closed under every applicable operator ([Eriksson, Röger, and Helmert, 2017](https://ojs.aaai.org/index.php/ICAPS/article/view/13818)). V15 therefore permits restricted searches for ordering but makes them report `UNKNOWN`; only all-action exhaustion or mechanically verified dominance/closure may support `IMPOSSIBLE`. It does not select the more prescriptive inverse solver, a generic BFS requirement, or an operational timeout change.
 
-## Pre-registered M3 Validation
+## Superseded v15 M3 Validation
+
+This section records the abandoned v15 design; it is not the active run plan. The frozen harness tree changed before gameplay, v16 changed the prompt again, and neither candidate produced live performance evidence.
 
 Frozen v15 is now pre-registered for serial measurement on a fresh `cd82-fb555c5d` run and then one externally randomized project-unrun Public-set game. FT09 was disqualified after the required report review exposed its detailed case study and before FT09 was run. Keeping FT09's six-level shape and excluding featured-case-study or project-exposed games leaves the canonical-CSV-ordered pool `[cn04-2fe56bfb, sc25-635fd71a, sp80-589a99af, tr87-cd924810]`, with human totals `[789, 350, 518, 414]`. Selection uses the `outputValue` of the first [NIST Randomness Beacon 2.0](https://csrc.nist.gov/projects/interoperable-randomness-beacons/beacon-20) pulse strictly after `2026-07-18T22:05:00Z`, fetched only after this rule is committed from `/beacon/2.0/pulse/time/next/1784412300000`; `int(outputValue, 16) % 4` indexes that fixed pool. Pulse `1865446` at `2026-07-18T22:06:00Z` returned `133DBF7A…4ED29`; its remainder is `1`, selecting `sc25-635fd71a`. This prevents choosing among already public per-game outcomes, but the selected run remains prospective Public-set validation rather than outcome-blind evidence. The fixed method identity remains prompt SHA-256 `a9860a5c8245a734afb3e5f2d802a9b6745d62b72eeaf7d49000dc905631d3fd` plus `schema_harness` tree `496abf464213baa7d12bc55db4060b8f4e4fb464`; documentation-only commits may occur, but any harness-tree or prompt-byte change invalidates the pair.
 
@@ -220,7 +222,27 @@ uv run python /private/tmp/schema-luna-driver-v1.py \
   --workdir FRESH_WORKDIR --audit-dir FRESH_EXTERNAL_AUDIT_DIR
 ```
 
-Both passes are required for M3. Scoring will stage the two distinct trajectories once each under the vendored scorer, never duplicate one run across dataset trees. The later 25-game sweep retains the stronger approximately 99% aggregate replication target; that aggregate target is not substituted for this per-game generalization gate.
+Both passes would have been required for M3. Scoring would stage the two distinct trajectories once each under the vendored scorer, never duplicate one run across dataset trees. This plan was superseded before either pass began.
+
+## Lean M3 Validation
+
+The [Schema report](https://schema-harness.github.io/) attributes its controlled gain to three enforced constraints: a runnable world model, whole-history validation before planning, and surprise-gated execution through `commit_actions`. It does not publish a standing system prompt or an ablation showing that more policy text helps. Locally, v9 is the only method with substantive live evidence: its unchanged 654-word prompt cleared five r11l levels at the per-level RHAE cap. V14, v15, and v16 grew to 2,218, 2,458, and 2,594 words without a live gameplay result. The cumulative certificate direction is retired pending contrary evidence.
+
+Hashes, fresh workdirs, and external audits improve attribution but not play; they remain out-of-band measurement controls rather than model instructions. The active method is frozen v9, prompt SHA-256 `d77045dd96baf669d7dee1d2c56cb48020d1b47626a774895bcd723b8eb59f12`, with `schema_harness` tree `eeed53772bddbec2a29b4a2a575bb383ead072c5`.
+
+The Luna adapter at `/private/tmp/schema-luna-driver-v1.py`, SHA-256 `b5611efbfa11fb8cb0fc597c54c90ebd06217401aad01ff769e76d03a7f3a13c`, restores all 14 published Locus tools. It keeps host configuration, unrelated tools, API credentials, and audit output outside the measured session, but no longer removes Locus capabilities or enforces v16's prompt-level path policy. Its first gate is a fresh BP35 run capped at 21 actions. Passing requires level 0 within its 21-action human baseline, full-history replay green before the winning commit, and clean scorer, guard, session, and tool-surface audits.
+
+If BP35 passes, the same v9 bytes run unchanged on fresh cd82 and sc25 sessions. Each M3 game must finish `WIN`, clear 6/6 levels, score at least 90.00% RHAE, retain contiguous event and action indices, and pass the same audits. These are prospective local Public-set checks, not hidden-set evidence. Provider-censored runs may resume only their original workdir and exact Codex session; productive runs are never replaced.
+
+```bash
+env -u DISABLE_AUTO_COMPACT ONLY_RESET_LEVELS=true \
+uv run python /private/tmp/schema-luna-driver-v1.py \
+  --game GAME --model gpt-5.6-luna --effort max \
+  --max-actions ACTION_LIMIT --max-turns 12 --no-progress-turns 3 \
+  --auto-compact-tokens 240000 \
+  --system-prompt-file schema_harness/prompts/physicist_v9_matched_transfer.md \
+  --workdir FRESH_WORKDIR --audit-dir FRESH_EXTERNAL_AUDIT_DIR
+```
 
 ## Pre-registered M4 Replication
 
@@ -230,4 +252,4 @@ The 25 canonical IDs will run serially in `vendor/baseline_actions.csv` order, e
 
 ## Status and Uncertainty
 
-M0 and M1 are proven. The contaminated development gate passes, and frozen v9 cleared the first five initially untouched r11l levels in `10/14/11/15/20` actions while restoring exact retrospective replay before every winning suffix. M2 is not yet satisfied: the level-5 continuation stopped at 72 total actions and is diagnostic because a solution-derived scratch artifact leaked before Turn 30. V15 is the current frozen candidate; its cd82 setup was censored and archived before a reasoning delta or action, so it still has no live performance result. It must clear fresh cd82 and the beacon-selected second game unchanged under the prospective session protocol before any M3 generalization claim. Only then should the same frozen method enter the full sweep and any ~99% reproduction comparison.
+M0 and M1 are proven. The contaminated development gate passes, and frozen v9 cleared the first five initially untouched r11l levels in `10/14/11/15/20` actions while restoring exact retrospective replay before every winning suffix. M2 is not yet satisfied: the level-5 continuation stopped at 72 total actions and is diagnostic because a solution-derived scratch artifact leaked before Turn 30. V9 is again the active candidate; v10-v16 are unvalidated hypotheses, not improvements. Coverage is the observed r11l score bottleneck, but one partial game cannot prove that coverage, provider limits, or model pairing are the only full-benchmark bottlenecks. A Luna 25-game result would be a cross-model score replication; exact reproduction of the published 98.98% additionally requires its Opus-first, Fable-below-80 fallback pairing.
