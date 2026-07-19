@@ -53,6 +53,9 @@ from .model_loader import ModelInterface
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 _PACKAGE_ROOT = Path(__file__).resolve().parent
+_REPO_OUTPUT_PATTERN = re.compile(
+    re.escape(_REPO_ROOT) + r"(?![A-Za-z0-9._-])"
+)
 _HARNESS_MANAGED_FILES = frozenset(
     {"events.jsonl", "mcp.json", "method_prompt.md", "run.json"}
 )
@@ -1018,6 +1021,9 @@ class LocusService:
         timeout: float,
         environment: Mapping[str, str] | None = None,
     ) -> str:
+        def redact(text: str) -> str:
+            return _REPO_OUTPUT_PATTERN.sub("<harness-repo>", text)
+
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -1038,12 +1044,15 @@ class LocusService:
                 partial += exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
             return (
                 f"ERROR: timed out after {_seconds_text(timeout)}s — process killed. "
-                f"Partial output below.\n{partial}"
+                f"Partial output below.\n{redact(partial)}"
             )
         elapsed = time.monotonic() - started
-        output = f"$ {display}\nexit={completed.returncode} in {elapsed:.2f}s\n--- stdout ---\n{completed.stdout}"
+        output = (
+            f"$ {display}\nexit={completed.returncode} in {elapsed:.2f}s"
+            f"\n--- stdout ---\n{redact(completed.stdout)}"
+        )
         if completed.stderr:
-            output += f"\n--- stderr ---\n{completed.stderr}"
+            output += f"\n--- stderr ---\n{redact(completed.stderr)}"
         return output
 
     def _subprocess_environment(self) -> dict[str, str]:
@@ -1051,10 +1060,17 @@ class LocusService:
 
         process_tmp = self.workdir / ".agent_scratch" / "process_tmp"
         matplotlib = self.workdir / ".agent_scratch" / "matplotlib"
+        process_home = self.workdir / ".agent_scratch" / "home"
         process_tmp.mkdir(parents=True, exist_ok=True)
         matplotlib.mkdir(parents=True, exist_ok=True)
+        if not process_home.resolve(strict=False).is_relative_to(self.workdir):
+            raise RuntimeError("agent process HOME escapes workdir")
+        process_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if process_home.is_symlink():
+            raise RuntimeError("agent process HOME must not be a symlink")
+        process_home.chmod(0o700)
         return {
-            "HOME": str(Path.home()),
+            "HOME": str(process_home),
             "PATH": "/usr/bin:/bin",
             "TMPDIR": str(process_tmp),
             "LANG": "C",

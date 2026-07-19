@@ -199,6 +199,29 @@ def test_process_tools_apply_os_sandbox_and_keep_normal_workdir_use(tmp_path):
         assert "exit=0" not in ctypes_output
         assert "sandbox-secret" not in ctypes_output
 
+        metadata_output = service.run_python(
+            "from pathlib import Path; "
+            f"print([p.name for p in Path({str(tmp_path.parent)!r}).iterdir()])"
+        )
+        assert outside.name not in metadata_output
+
+
+def test_process_tools_redact_harness_path_and_use_private_home(tmp_path):
+    repo = str(Path(__file__).resolve().parents[1])
+    sibling = repo + "0"
+    with _service(tmp_path) as service:
+        output = service.run_python(
+            "from pathlib import Path; "
+            f"print({repo!r}); print({sibling!r}); print(Path.home())"
+        )
+
+    assert "<harness-repo>" in output
+    assert sibling in output
+    assert "<harness-repo>0" not in output
+    assert f"\n{Path.home()}\n" not in output
+    assert str(tmp_path / ".agent_scratch" / "home") in output
+    assert (tmp_path / ".agent_scratch" / "home").stat().st_mode & 0o777 == 0o700
+
 
 def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
     events = tmp_path / "events.jsonl"
