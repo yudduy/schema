@@ -321,6 +321,8 @@ def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
     monkeypatch.setattr(runner_module, "run_claude_turn", fake_run_turn)
     args = parse_args(
         [
+            "--provider",
+            "claude",
             "--game",
             "bp35",
             "--workdir",
@@ -331,7 +333,7 @@ def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
         ]
     )
 
-    assert runner_module.run_live(args) == 1
+    assert runner_module._run_live(args) == 1
     assert calls == 1
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["kind"] for event in events].count("turn_started") == 1
@@ -348,3 +350,1585 @@ def test_live_run_lock_rejects_overlap_and_releases(tmp_path):
 
     with runner_module._live_run_lock(lock_path):
         pass
+
+
+def test_default_live_provider_is_luna_max(tmp_path):
+    args = parse_args(["--workdir", str(tmp_path), "--no-system-prompt"])
+
+    assert args.provider == "codex"
+    assert args.model == "gpt-5.6-luna"
+    assert args.effort == "max"
+
+
+def test_claude_model_infers_provider_for_legacy_commands(tmp_path):
+    args = parse_args(
+        [
+            "--model",
+            "claude-opus-4-8",
+            "--effort",
+            "max",
+            "--workdir",
+            str(tmp_path),
+            "--no-system-prompt",
+        ]
+    )
+
+    assert args.provider == "claude"
+    assert args.model == "claude-opus-4-8"
+    assert args.effort == "max"
+
+
+@pytest.mark.parametrize("value", [None, "TRUE", " true ", "1"])
+def test_codex_requires_exact_reset_only_environment_before_initialization(
+    monkeypatch, tmp_path, value
+):
+    if value is None:
+        monkeypatch.delenv("ONLY_RESET_LEVELS", raising=False)
+    else:
+        monkeypatch.setenv("ONLY_RESET_LEVELS", value)
+    monkeypatch.setattr(
+        runner_module,
+        "initialize_workdir",
+        lambda *_a, **_k: pytest.fail("invalid reset mode must not initialize a run"),
+    )
+    args = parse_args(
+        ["--workdir", str(tmp_path), "--no-system-prompt", "--max-turns", "1"]
+    )
+
+    with pytest.raises(RuntimeError, match="ONLY_RESET_LEVELS=true"):
+        runner_module._run_live(args)
+
+
+def test_invalid_codex_effort_does_not_initialize_workdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    monkeypatch.setattr(
+        runner_module,
+        "initialize_workdir",
+        lambda *_a, **_k: pytest.fail("invalid effort must not initialize a run"),
+    )
+    args = parse_args(
+        [
+            "--workdir",
+            str(tmp_path),
+            "--effort",
+            "ultra",
+            "--no-system-prompt",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="reasoning effort"):
+        runner_module._run_live(args)
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [("--turn-timeout", "0"), ("--context-rollover-tokens", "-1")],
+)
+def test_runtime_timeouts_and_rollover_thresholds_must_be_positive(
+    tmp_path, flag, value
+):
+    with pytest.raises(SystemExit):
+        parse_args(
+            ["--workdir", str(tmp_path), "--no-system-prompt", flag, value]
+        )
+
+
+def test_codex_command_is_persistent_read_only_and_locus_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setenv("SCHEMA_ENVIRONMENTS_DIR", "/protected/environments")
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    monkeypatch.setenv("PYTHONPATH", "/supplemental/one:/supplemental/two")
+    command = runner_module._codex_command(
+        driver_cwd=tmp_path / "driver",
+        workdir=tmp_path,
+        game="bp35-0a0ad940",
+        turn=3,
+        turn_id="turn-000003",
+        max_actions=20,
+        model="gpt-5.6-luna",
+        effort="max",
+        method_prompt="method",
+        model_catalog=tmp_path / "catalog.json",
+    )
+
+    assert command[:2] == ["/opt/bin/codex", "exec"]
+    assert "--ephemeral" not in command
+    assert command[command.index("-C") + 1] == str(tmp_path / "driver")
+    assert "--ignore-user-config" in command
+    assert "--ignore-rules" in command
+    assert command[-1] == "-"
+    overrides = {
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "-c"
+    }
+    assert 'sandbox_mode="read-only"' in overrides
+    assert 'web_search="disabled"' in overrides
+    assert 'approval_policy="never"' in overrides
+    assert f'model_catalog_json="{tmp_path / "catalog.json"}"' in overrides
+    assert "project_doc_max_bytes=0" in overrides
+    assert "include_permissions_instructions=false" in overrides
+    assert "include_apps_instructions=false" in overrides
+    assert "skills.include_instructions=false" in overrides
+    assert 'mcp_servers.locus.default_tools_approval_mode="approve"' in overrides
+    assert "mcp_servers.locus.tool_timeout_sec=1200" in overrides
+    assert (
+        'mcp_servers.locus.env.SCHEMA_ENVIRONMENTS_DIR="/protected/environments"'
+        in overrides
+    )
+    assert 'mcp_servers.locus.env.ONLY_RESET_LEVELS="true"' in overrides
+    assert (
+        "mcp_servers.locus.env.PYTHONPATH="
+        + json.dumps(
+            f"{runner_module.REPO_ROOT}{runner_module.os.pathsep}"
+            "/supplemental/one:/supplemental/two"
+        )
+    ) in overrides
+    assert (
+        "mcp_servers.locus.enabled_tools="
+        + json.dumps(list(runner_module.CODEX_LOCUS_TOOLS), separators=(",", ":"))
+    ) in overrides
+    assert not any("view_image" in value for value in command)
+    disabled = tuple(
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "--disable"
+    )
+    assert disabled == runner_module._CODEX_DISABLED_FEATURES
+    assert "code_mode_host" in disabled
+    developer = next(value for value in overrides if value.startswith("developer_instructions="))
+    instructions = json.loads(developer.split("=", 1)[1])
+    assert instructions.startswith("method\n")
+    assert runner_module.CODEX_DRIVER_POLICY in instructions
+
+    child_environment = runner_module._codex_environment(tmp_path / "codex-home")
+    assert "SCHEMA_ENVIRONMENTS_DIR" not in child_environment
+    assert "ONLY_RESET_LEVELS" not in child_environment
+
+
+def test_codex_resume_command_preserves_strict_boundary(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+
+    command = runner_module._codex_command(
+        driver_cwd=tmp_path / "driver",
+        workdir=tmp_path,
+        game="bp35-0a0ad940",
+        turn=4,
+        turn_id="turn-000004",
+        max_actions=20,
+        model="gpt-5.6-luna",
+        effort="max",
+        method_prompt="method",
+        model_catalog=tmp_path / "catalog.json",
+        session_id="thread-1",
+        resume=True,
+    )
+
+    assert command[:3] == ["/opt/bin/codex", "exec", "resume"]
+    assert "-C" not in command
+    assert "--color" not in command
+    assert "--strict-config" in command
+    assert "--ignore-user-config" in command
+    assert command[-2:] == ["thread-1", "-"]
+    disabled = tuple(
+        command[index + 1]
+        for index, value in enumerate(command[:-1])
+        if value == "--disable"
+    )
+    assert disabled == runner_module._CODEX_DISABLED_FEATURES
+
+
+def test_codex_jsonl_parser_accepts_only_locus_calls():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server_name": "locus",
+                        "tool_name": "read_history",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.updated",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server_name": "locus",
+                        "tool_name": "read_history",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server_name": "locus",
+                        "tool_name": "read_history",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-1",
+                        "type": "agent_message",
+                        "text": "done",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 12, "output_tokens": 3},
+                }
+            ),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["session_id"] == "thread-1"
+    assert result["result"] == "done"
+    assert result["usage"]["cost_available"] is False
+    assert result["total_cost_usd"] == 0.0
+    assert result["is_error"] is False
+
+
+def test_codex_jsonl_parser_rejects_resume_session_fork():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-other"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(
+        stdout, "", returncode=0, expected_session_id="thread-trusted"
+    )
+
+    assert result["is_error"] is True
+    assert result["violations"] == [
+        "Codex resumed a different session: expected 'thread-trusted', got 'thread-other'"
+    ]
+
+
+@pytest.mark.parametrize("item_type", ["command_execution", "file_change", "view_image"])
+def test_codex_jsonl_parser_rejects_native_tools(item_type):
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {"type": "item.completed", "item": {"type": item_type}}
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is True
+    assert result["violations"]
+
+
+def test_codex_jsonl_parser_rejects_unknown_records_and_redacts_stderr():
+    secret = "/protected/environments/secret-token"
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": "native.future_tool", "payload": secret}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, secret, returncode=0)
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["unknown Codex record: 'native.future_tool'"]
+    assert secret not in result["result"]
+    assert "private driver logs" in result["result"]
+
+
+def test_codex_jsonl_parser_rejects_unhashable_record_type():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": ["native"]}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["unknown Codex record: ['native']"]
+
+
+def test_codex_jsonl_parser_rejects_incomplete_stream_after_lag_error():
+    warning = "in-process app-server event stream lagged; dropped 3 events"
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "item-0", "type": "error", "message": warning},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-1",
+                        "type": "agent_message",
+                        "text": "done",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["native or unknown Codex item: error"]
+
+
+def test_codex_jsonl_parser_rejects_stream_lag_reported_on_stderr():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(
+        stdout,
+        "in-process app-server event stream lagged; dropped 3 events",
+        returncode=0,
+    )
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["Codex event stream dropped records"]
+
+
+def test_codex_jsonl_parser_accepts_context_compaction_item():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"id": "item-0", "type": "context_compaction"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is False
+    assert result["violations"] == []
+
+
+def test_codex_jsonl_parser_accepts_completion_only_reasoning_summary():
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-0",
+                        "type": "reasoning",
+                        "text": "summary",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-1",
+                        "type": "agent_message",
+                        "text": "done",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is False
+    assert result["violations"] == []
+
+
+@pytest.mark.parametrize("value", ["oops", -1, 1.5, True])
+def test_codex_jsonl_parser_rejects_invalid_token_usage(value):
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": value},
+                }
+            ),
+        ]
+    )
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["Codex emitted invalid input_tokens usage"]
+    assert result["usage"] == {"cost_available": False}
+
+
+@pytest.mark.parametrize(
+    "item_records, expected",
+    [
+        (
+            [
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server": "locus",
+                        "tool": "read_history",
+                    },
+                }
+            ],
+            "Codex item 'item-0' has 0 completion records; expected exactly 1",
+        ),
+        (
+            [
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server": "locus",
+                        "tool": "read_history",
+                    },
+                }
+            ],
+            "Codex MCP item 'item-0' has 0 start records; expected exactly 1",
+        ),
+        (
+            [
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "item-0",
+                        "type": "mcp_tool_call",
+                        "server": "locus",
+                        "tool": "read_history",
+                    },
+                },
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "item-0",
+                        "type": "agent_message",
+                        "text": "done",
+                    },
+                },
+            ],
+            "Codex item 'item-0' changed type",
+        ),
+    ],
+)
+def test_codex_jsonl_parser_rejects_incomplete_item_lifecycle(
+    item_records, expected
+):
+    records = [
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.started"},
+        *item_records,
+        {"type": "turn.completed", "usage": {}},
+    ]
+
+    result = runner_module._parse_codex_jsonl(
+        "\n".join(json.dumps(record) for record in records), "", returncode=0
+    )
+
+    assert result["is_error"] is True
+    assert expected in result["violations"]
+
+
+@pytest.mark.parametrize(
+    "records, expected",
+    [
+        (
+            [
+                {"type": "thread.started", "thread_id": "thread-1"},
+                {"type": "turn.completed", "usage": {}},
+            ],
+            "Codex stream has 0 turn.started records; expected exactly 1",
+        ),
+        (
+            [
+                {"type": "thread.started", "thread_id": "thread-1"},
+                {"type": "turn.started"},
+                {"type": "turn.started"},
+                {"type": "turn.completed", "usage": {}},
+            ],
+            "Codex stream has 2 turn.started records; expected exactly 1",
+        ),
+        (
+            [
+                {"type": "turn.started"},
+                {"type": "thread.started", "thread_id": "thread-1"},
+                {"type": "turn.completed", "usage": {}},
+            ],
+            "Codex lifecycle records are out of order",
+        ),
+    ],
+)
+def test_codex_jsonl_parser_requires_exact_ordered_lifecycle(records, expected):
+    stdout = "\n".join(json.dumps(record) for record in records)
+
+    result = runner_module._parse_codex_jsonl(stdout, "", returncode=0)
+
+    assert result["is_error"] is True
+    assert expected in result["violations"]
+
+
+def test_codex_timeout_recovers_thread_id_from_partial_jsonl():
+    stdout = json.dumps({"type": "thread.started", "thread_id": "thread-1"}) + "\n{"
+
+    result = runner_module._parse_codex_jsonl(
+        stdout, "", returncode=-9, timed_out=True
+    )
+
+    assert result["session_id"] == "thread-1"
+    assert result["timed_out"] is True
+    assert result["is_error"] is True
+    assert result["violations"] == [
+        "Codex turn timed out before complete stream audit"
+    ]
+
+
+def test_workdir_rejects_provider_model_and_action_cap_drift(tmp_path):
+    workdir = tmp_path / "run"
+    runner_module.initialize_workdir(
+        workdir,
+        game="bp35-0a0ad940",
+        provider="claude",
+        model="claude-test",
+        max_actions=10,
+        system_prompt_file=None,
+    )
+
+    with pytest.raises(ValueError, match="provider"):
+        runner_module.initialize_workdir(
+            workdir,
+            game="bp35-0a0ad940",
+            provider="codex",
+            model="gpt-5.6-luna",
+            max_actions=10,
+            effort="max",
+            system_prompt_file=None,
+        )
+    with pytest.raises(ValueError, match="model"):
+        runner_module.initialize_workdir(
+            workdir,
+            game="bp35-0a0ad940",
+            provider="claude",
+            model="different",
+            max_actions=10,
+            system_prompt_file=None,
+        )
+    with pytest.raises(ValueError, match="max_actions"):
+        runner_module.initialize_workdir(
+            workdir,
+            game="bp35-0a0ad940",
+            provider="claude",
+            model="claude-test",
+            max_actions=11,
+            system_prompt_file=None,
+        )
+
+
+def test_session_checkpoint_is_provider_and_model_bound(tmp_path):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "sessions.json").write_text(
+        json.dumps(
+            {
+                "cwd": str(tmp_path.resolve()),
+                "provider": "codex",
+                "model": "gpt-5.6-luna",
+                "sid": "thread-1",
+                "resume": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_driver_session(
+        tmp_path, provider="codex", model="gpt-5.6-luna"
+    ) == ("thread-1", False)
+    assert load_driver_session(tmp_path, provider="claude", model="gpt-5.6-luna") is None
+    assert load_driver_session(tmp_path, provider="codex", model="gpt-5.6-sol") is None
+
+
+def test_codex_home_is_private_and_copies_only_subscription_auth(monkeypatch, tmp_path):
+    fake_home = tmp_path / "user"
+    auth = fake_home / ".codex" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": None,
+                "tokens": {"access_token": "subscription-token"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    auth.chmod(0o600)
+    homes = tmp_path / "isolated"
+    monkeypatch.setattr(runner_module.Path, "home", lambda: fake_home)
+    monkeypatch.setattr(runner_module.tempfile, "gettempdir", lambda: str(homes))
+
+    codex_home = runner_module._prepare_codex_home(tmp_path / "trajectory")
+
+    assert codex_home.parent == homes
+    assert codex_home.stat().st_mode & 0o077 == 0
+    isolated_auth = codex_home / "auth.json"
+    assert isolated_auth.is_file()
+    assert not isolated_auth.is_symlink()
+    assert isolated_auth.stat().st_mode & 0o077 == 0
+    assert isolated_auth.read_bytes() == auth.read_bytes()
+
+
+def test_codex_home_preserves_valid_isolated_auth_refresh(monkeypatch, tmp_path):
+    fake_home = tmp_path / "user"
+    auth = fake_home / ".codex" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    original = {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {"access_token": "original-token"},
+    }
+    auth.write_text(json.dumps(original), encoding="utf-8")
+    auth.chmod(0o600)
+    homes = tmp_path / "isolated"
+    monkeypatch.setattr(runner_module.Path, "home", lambda: fake_home)
+    monkeypatch.setattr(runner_module.tempfile, "gettempdir", lambda: str(homes))
+    codex_home = runner_module._prepare_codex_home(tmp_path / "trajectory")
+    isolated_auth = codex_home / "auth.json"
+    refreshed = {
+        **original,
+        "tokens": {"access_token": "refreshed-token"},
+    }
+    isolated_auth.write_text(json.dumps(refreshed), encoding="utf-8")
+    isolated_auth.chmod(0o600)
+
+    assert runner_module._prepare_codex_home(tmp_path / "trajectory") == codex_home
+    assert json.loads(isolated_auth.read_text(encoding="utf-8")) == refreshed
+
+    # Once isolated, unrelated host-auth changes cannot replace the trajectory's
+    # valid refreshable subscription credential.
+    auth.write_text(
+        json.dumps(
+            {"auth_mode": "apikey", "OPENAI_API_KEY": "key", "tokens": None}
+        ),
+        encoding="utf-8",
+    )
+    assert runner_module._prepare_codex_home(tmp_path / "trajectory") == codex_home
+    assert json.loads(isolated_auth.read_text(encoding="utf-8")) == refreshed
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"auth_mode": "apikey", "OPENAI_API_KEY": "key", "tokens": None},
+        {"auth_mode": "chatgpt", "OPENAI_API_KEY": "key", "tokens": {}},
+        {"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "tokens": {}},
+    ],
+)
+def test_codex_home_rejects_non_subscription_auth(monkeypatch, tmp_path, payload):
+    fake_home = tmp_path / "user"
+    auth = fake_home / ".codex" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(json.dumps(payload), encoding="utf-8")
+    auth.chmod(0o600)
+    monkeypatch.setattr(runner_module.Path, "home", lambda: fake_home)
+
+    with pytest.raises(RuntimeError, match="subscription authentication"):
+        runner_module._prepare_codex_home(tmp_path / "trajectory")
+
+
+def test_codex_session_availability_requires_local_rollout_file(tmp_path):
+    home = tmp_path / "codex-home"
+    rollout = home / "sessions" / "2026" / "07" / "18"
+    rollout.mkdir(parents=True)
+    session_id = "019f-session"
+
+    assert runner_module._codex_session_available(home, session_id) is False
+    candidate = rollout / "rollout-different-file-id.jsonl"
+    candidate.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "different-session"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert runner_module._codex_session_available(home, session_id) is False
+    candidate.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": session_id},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert runner_module._codex_session_available(home, session_id) is True
+
+
+def test_codex_catalog_pins_text_only_luna_metadata(monkeypatch, tmp_path):
+    catalog = {
+        "models": [
+            {
+                "slug": "gpt-5.6-luna",
+                "input_modalities": ["text", "image"],
+                "supports_image_detail_original": True,
+                "multi_agent_version": "v1",
+                "tool_mode": "code_mode_only",
+                "experimental_supported_tools": ["native"],
+                "supported_reasoning_levels": [{"effort": "max"}],
+            }
+        ]
+    }
+
+    def fake_run(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(
+                command, 0, f"{runner_module.VALIDATED_CODEX_CLI_VERSION}\n", ""
+            )
+        return subprocess.CompletedProcess(command, 0, json.dumps(catalog), "")
+
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    path, digest, version = runner_module._prepare_codex_catalog(
+        tmp_path,
+        codex_home=tmp_path / "home",
+        model="gpt-5.6-luna",
+        effort="max",
+    )
+
+    selected = json.loads(path.read_text(encoding="utf-8"))["models"][0]
+    assert selected["input_modalities"] == ["text"]
+    assert selected["supports_image_detail_original"] is False
+    assert selected["multi_agent_version"] is None
+    assert selected["tool_mode"] is None
+    assert selected["experimental_supported_tools"] == []
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert version == runner_module.VALIDATED_CODEX_CLI_VERSION
+    assert path.stat().st_mode & 0o222 == 0
+
+    with pytest.raises(RuntimeError, match="does not support"):
+        runner_module._prepare_codex_catalog(
+            tmp_path,
+            codex_home=tmp_path / "home",
+            model="gpt-5.6-luna",
+            effort="ultra",
+        )
+
+
+def test_codex_catalog_replaces_fresh_preseed_and_detects_resume_tamper(
+    monkeypatch, tmp_path
+):
+    bundled = {
+        "models": [
+            {
+                "slug": "gpt-5.6-luna",
+                "base_instructions": "bundled",
+                "input_modalities": ["text", "image"],
+                "supports_image_detail_original": True,
+                "multi_agent_version": "v1",
+                "tool_mode": "code_mode_only",
+                "experimental_supported_tools": ["native"],
+                "supported_reasoning_levels": [{"effort": "max"}],
+            }
+        ]
+    }
+
+    def fake_run(command, **_kwargs):
+        output = (
+            runner_module.VALIDATED_CODEX_CLI_VERSION
+            if command[-1] == "--version"
+            else json.dumps(bundled)
+        )
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    catalog_path = tmp_path / "config" / "codex" / "model-catalog.json"
+    catalog_path.parent.mkdir(parents=True)
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-5.6-luna",
+                        "base_instructions": "preseeded",
+                        "input_modalities": ["text"],
+                        "supports_image_detail_original": False,
+                        "multi_agent_version": None,
+                        "tool_mode": None,
+                        "experimental_supported_tools": [],
+                        "supported_reasoning_levels": [{"effort": "max"}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+
+    path, digest, _version = runner_module._prepare_codex_catalog(
+        tmp_path,
+        codex_home=tmp_path / "home",
+        model="gpt-5.6-luna",
+        effort="max",
+    )
+    selected = json.loads(path.read_text(encoding="utf-8"))["models"][0]
+    assert selected["base_instructions"] == "bundled"
+
+    (tmp_path / "run.json").write_text(
+        json.dumps(
+            {
+                "driver": {
+                    "cli_version": runner_module.VALIDATED_CODEX_CLI_VERSION,
+                    "model_catalog_sha256": digest,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o644)
+    path.write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="catalog changed"):
+        runner_module._prepare_codex_catalog(
+            tmp_path,
+            codex_home=tmp_path / "home",
+            model="gpt-5.6-luna",
+            effort="max",
+        )
+
+
+def test_codex_catalog_rejects_unvalidated_cli_version(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, "codex-cli 0.145.0", ""
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="outside the validated driver boundary"):
+        runner_module._prepare_codex_catalog(
+            tmp_path,
+            codex_home=tmp_path / "home",
+            model="gpt-5.6-luna",
+            effort="max",
+        )
+
+
+def test_codex_metadata_records_and_freezes_security_boundary(tmp_path):
+    (tmp_path / "run.json").write_text("{}", encoding="utf-8")
+    arguments = {
+        "catalog_digest": "catalog-digest",
+        "cli_version": runner_module.VALIDATED_CODEX_CLI_VERSION,
+        "max_turns": 120,
+        "turn_timeout": 1200,
+        "turn_token_cap": 1_000_000,
+        "run_token_cap": 60_000_000,
+        "no_progress_turns": 5,
+        "only_reset_levels": "true",
+        "model": "gpt-5.6-luna",
+        "effort": "max",
+    }
+
+    runner_module._record_codex_metadata(tmp_path, **arguments)
+
+    driver = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))["driver"]
+    assert driver["cli_version"] == runner_module.VALIDATED_CODEX_CLI_VERSION
+    assert driver["ephemeral_turns"] is False
+    assert driver["disabled_features"] == list(runner_module._CODEX_DISABLED_FEATURES)
+    assert driver["enabled_locus_tools"] == list(runner_module.CODEX_LOCUS_TOOLS)
+    assert len(driver["driver_policy_sha256"]) == 64
+    assert len(driver["policy_config_sha256"]) == 64
+    runner_module._record_codex_metadata(tmp_path, **arguments)
+
+    with pytest.raises(ValueError, match="different Codex driver metadata"):
+        runner_module._record_codex_metadata(
+            tmp_path, **{**arguments, "turn_timeout": 1201}
+        )
+
+
+def test_codex_timeout_kills_the_driver_process_group(monkeypatch, tmp_path):
+    class FakeProcess:
+        pid = 4321
+        returncode = -9
+
+        def __init__(self):
+            self.calls = 0
+
+        def communicate(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired("codex", 1)
+            return (
+                json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+                "",
+            )
+
+    process = FakeProcess()
+    killed = []
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(runner_module.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(
+        runner_module.os, "killpg", lambda pid, sig: killed.append((pid, sig))
+    )
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text("{}", encoding="utf-8")
+    catalog_digest = hashlib.sha256(catalog.read_bytes()).hexdigest()
+    result = runner_module.run_codex_turn(
+        "turn",
+        workdir=tmp_path,
+        codex_home=tmp_path / "home",
+        model_catalog=catalog,
+        catalog_digest=catalog_digest,
+        game="bp35-0a0ad940",
+        turn=1,
+        turn_id="turn-000001",
+        max_actions=10,
+        model="gpt-5.6-luna",
+        effort="max",
+        session_id="",
+        resume=False,
+        timeout=1,
+        system_prompt_file=None,
+    )
+
+    assert killed == [(4321, runner_module.signal.SIGKILL)]
+    assert result["timed_out"] is True
+    assert result["session_id"] == "thread-1"
+    raw = tmp_path / "sessions" / "codex-turn-000001.jsonl"
+    assert raw.is_file()
+    assert raw.stat().st_mode & 0o077 == 0
+    assert raw.parent.stat().st_mode & 0o077 == 0
+
+
+def test_codex_catalog_digest_is_rechecked_before_process_start(monkeypatch, tmp_path):
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text("changed", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "Popen",
+        lambda *_a, **_k: pytest.fail("tampered catalog must fail before inference"),
+    )
+
+    with pytest.raises(RuntimeError, match="catalog changed during the run"):
+        runner_module.run_codex_turn(
+            "turn",
+            workdir=tmp_path,
+            codex_home=tmp_path / "home",
+            model_catalog=catalog,
+            catalog_digest=hashlib.sha256(b"original").hexdigest(),
+            game="bp35-0a0ad940",
+            turn=1,
+            turn_id="turn-000001",
+            max_actions=10,
+            model="gpt-5.6-luna",
+            effort="max",
+            session_id="",
+            resume=False,
+            timeout=1,
+            system_prompt_file=None,
+        )
+
+
+def test_codex_live_path_skips_claude_auth_and_enforces_token_cap(monkeypatch, tmp_path):
+    snapshot = _snapshot()
+    calls = 0
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    def fake_codex_turn(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "session_id": f"thread-{calls}",
+            "usage": {
+                "input_tokens": 300_000,
+                "output_tokens": 1,
+                "cost_available": False,
+            },
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 1,
+            "is_error": False,
+            "result": "no commit",
+        }
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(
+        runner_module,
+        "oauth_token",
+        lambda: pytest.fail("Codex must not request Claude authentication"),
+    )
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner_module, "run_codex_turn", fake_codex_turn)
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "5",
+            "--turn-token-cap",
+            "300000",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 0
+    assert calls == 1
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    started = next(event for event in events if event["kind"] == "run_started")
+    assert started["provider"] == "codex"
+    assert started["model"] == "gpt-5.6-luna"
+    telemetry = next(event for event in events if event["kind"] == "turn_telemetry")
+    assert telemetry["usage"]["cost_available"] is False
+
+
+def test_missing_codex_rollout_starts_fresh_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    snapshot = _snapshot()
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "sessions.json").write_text(
+        json.dumps(
+            {
+                "cwd": str(tmp_path.resolve()),
+                "provider": "codex",
+                "model": "gpt-5.6-luna",
+                "sid": "thread-missing",
+                "resume": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed = []
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    def fake_codex_turn(*_args, **kwargs):
+        observed.append((kwargs["session_id"], kwargs["resume"]))
+        return {
+            "session_id": "thread-fresh",
+            "usage": {"cost_available": False},
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 1,
+            "is_error": False,
+            "result": "no commit",
+        }
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(runner_module, "_prepare_codex_home", lambda _workdir: codex_home)
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner_module, "run_codex_turn", fake_codex_turn)
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "1",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 0
+    assert observed == [("", False)]
+    checkpoint = json.loads((sessions / "sessions.json").read_text(encoding="utf-8"))
+    assert checkpoint["sid"] == "thread-fresh"
+    assert checkpoint["resume"] is True
+
+
+def test_historical_driver_totals_recover_cost_tokens_and_turns(tmp_path):
+    records = [
+        {"kind": "turn_started", "turn": 1},
+        {
+            "kind": "turn_telemetry",
+            "turn": 1,
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+            "total_cost_usd": 1.25,
+        },
+        {"kind": "turn_started", "turn": 2},
+        {
+            "kind": "turn_telemetry",
+            "turn": 2,
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 3,
+                "cost_available": False,
+            },
+            "total_cost_usd": 0.0,
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    costs, tokens, turns = runner_module._historical_driver_totals(tmp_path)
+
+    assert costs == [1.25]
+    assert tokens == 35
+    assert turns == 2
+
+
+def test_historical_no_progress_recovers_only_trailing_stalled_turns(tmp_path):
+    records = [
+        {"kind": "turn_started", "turn": 1, "level": 0, "env_step": 0},
+        {"kind": "turn_started", "turn": 2, "level": 0, "env_step": 0},
+        {"kind": "turn_started", "turn": 3, "level": 1, "env_step": 1},
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    assert runner_module._historical_no_progress(
+        tmp_path, _snapshot(history_len=1)
+    ) == 1
+
+
+def test_run_started_marks_restart_without_actions_as_resumed(tmp_path):
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps({"seq": 1, "kind": "run_finished"}) + "\n",
+        encoding="utf-8",
+    )
+
+    runner_module._run_started(
+        tmp_path,
+        _snapshot(),
+        provider="codex",
+        model="gpt-5.6-luna",
+        max_actions=10,
+    )
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[-1]["kind"] == "run_started"
+    assert records[-1]["resumed"] is True
+    assert records[-1]["resumed_transitions"] == 0
+
+
+@pytest.mark.parametrize(
+    ("max_turns", "run_token_cap", "records"),
+    [
+        (1, 1_000, [{"kind": "turn_started", "turn": 1}]),
+        (
+            5,
+            100,
+            [
+                {"kind": "turn_started", "turn": 1},
+                {
+                    "kind": "turn_telemetry",
+                    "turn": 1,
+                    "usage": {
+                        "input_tokens": 90,
+                        "output_tokens": 10,
+                        "cost_available": False,
+                    },
+                    "total_cost_usd": 0.0,
+                },
+            ],
+        ),
+    ],
+)
+def test_codex_preflight_does_not_run_after_trajectory_cap(
+    monkeypatch, tmp_path, max_turns, run_token_cap, records
+):
+    snapshot = _snapshot()
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    events = tmp_path / "events.jsonl"
+    events.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    before = events.read_bytes()
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "run_codex_turn",
+        lambda *_a, **_k: pytest.fail("driver must not run after a trajectory cap"),
+    )
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            str(max_turns),
+            "--run-token-cap",
+            str(run_token_cap),
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 0
+    assert events.read_bytes() == before
+
+
+def test_claude_cost_cap_remains_per_invocation(monkeypatch, tmp_path):
+    snapshot = _snapshot()
+    calls = 0
+    records = [
+        {"seq": 1, "kind": "turn_started", "turn": 1},
+        {
+            "seq": 2,
+            "kind": "turn_telemetry",
+            "turn": 1,
+            "usage": {},
+            "total_cost_usd": 5.0,
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(runner_module, "oauth_token", lambda: "test-token")
+
+    def fake_claude_turn(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "session_id": "claude-session",
+            "usage": {"input_tokens": 10},
+            "total_cost_usd": 0.0,
+            "num_turns": 1,
+            "is_error": False,
+            "result": "no commit",
+        }
+
+    monkeypatch.setattr(runner_module, "run_claude_turn", fake_claude_turn)
+    args = parse_args(
+        [
+            "--provider",
+            "claude",
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "2",
+            "--run-cost-cap",
+            "5",
+            "--turn-token-cap",
+            "1",
+            "--run-token-cap",
+            "1",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 0
+    assert calls == 2
+
+
+def test_timeout_with_completed_commit_stops_without_emitting_fallback(
+    monkeypatch, tmp_path
+):
+    snapshot = _snapshot()
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    committed = CommittedTurn(
+        plan=[[3, None, None]],
+        reason="probe",
+        result=ExecutionResult(
+            committed=1,
+            executed=1,
+            halt_reason="completed",
+            start_level=0,
+            end_level=0,
+            start_state="NOT_FINISHED",
+            end_state="NOT_FINISHED",
+        ),
+    )
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "run_codex_turn",
+        lambda *_a, **_k: {
+            "session_id": "thread-1",
+            "usage": {"cost_available": False},
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 0,
+            "is_error": True,
+            "timed_out": True,
+            "result": "Codex driver rejected the turn.",
+            "violations": ["Codex turn timed out before complete stream audit"],
+        },
+    )
+    monkeypatch.setattr(
+        runner_module, "load_committed_turn", lambda _workdir, _turn_id: committed
+    )
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "1",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 1
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert all(event["kind"] != "turn_fallback" for event in events)
+    # A timeout recovers the thread id for diagnostics only. Its incomplete audit
+    # stream makes that session untrusted, even when Locus durably committed.
+    checkpoint = json.loads(
+        (tmp_path / "sessions" / "sessions.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["invalidated"] is True
+    assert checkpoint["sid"] == ""
+    assert load_driver_session(
+        tmp_path, provider="codex", model="gpt-5.6-luna"
+    ) is None
+
+
+def test_rejected_resume_invalidates_trusted_session_checkpoint(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    snapshot = _snapshot()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    checkpoint = {
+        "cwd": str(tmp_path.resolve()),
+        "provider": "codex",
+        "model": "gpt-5.6-luna",
+        "sid": "thread-trusted",
+        "resume": True,
+    }
+    (sessions / "sessions.json").write_text(
+        json.dumps(checkpoint), encoding="utf-8"
+    )
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "run_codex_turn",
+        lambda *_a, **_k: {
+            "session_id": "thread-other",
+            "usage": {"cost_available": False},
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 0,
+            "is_error": True,
+            "timed_out": False,
+            "result": "rejected",
+            "violations": ["session mismatch"],
+        },
+    )
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "1",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 1
+    invalidated = json.loads(
+        (sessions / "sessions.json").read_text(encoding="utf-8")
+    )
+    assert invalidated["invalidated"] is True
+    assert invalidated["sid"] == ""
+    assert load_driver_session(
+        tmp_path, provider="codex", model="gpt-5.6-luna"
+    ) is None
+
+
+def test_auth_bridge_change_becomes_structured_driver_error(monkeypatch, tmp_path):
+    class FakeProcess:
+        pid = 4321
+        returncode = 0
+
+        def communicate(self, **_kwargs):
+            return (
+                "\n".join(
+                    [
+                            json.dumps(
+                                {"type": "thread.started", "thread_id": "thread-1"}
+                            ),
+                            json.dumps({"type": "turn.started"}),
+                            json.dumps({"type": "turn.completed", "usage": {}}),
+                    ]
+                ),
+                "",
+            )
+
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(
+        runner_module.subprocess, "Popen", lambda *_a, **_k: FakeProcess()
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_home",
+        lambda _workdir: (_ for _ in ()).throw(RuntimeError("secret path")),
+    )
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text("{}", encoding="utf-8")
+    catalog_digest = hashlib.sha256(catalog.read_bytes()).hexdigest()
+    result = runner_module.run_codex_turn(
+        "turn",
+        workdir=tmp_path,
+        codex_home=tmp_path / "home",
+        model_catalog=catalog,
+        catalog_digest=catalog_digest,
+        game="bp35-0a0ad940",
+        turn=1,
+        turn_id="turn-000001",
+        max_actions=10,
+        model="gpt-5.6-luna",
+        effort="max",
+        session_id="",
+        resume=False,
+        timeout=1,
+        system_prompt_file=None,
+    )
+
+    assert result["is_error"] is True
+    assert result["violations"] == ["Codex credential bridge changed during the turn"]
+    assert "secret path" not in result["result"]
+
+
+def test_codex_live_workdir_must_be_outside_repository(tmp_path):
+    runner_module._validate_codex_workdir(tmp_path)
+    with pytest.raises(ValueError, match="outside"):
+        runner_module._validate_codex_workdir(runner_module.REPO_ROOT / "nested-run")
+    with pytest.raises(ValueError, match="must not contain"):
+        runner_module._validate_codex_workdir(runner_module.REPO_ROOT.parent)
