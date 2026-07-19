@@ -926,6 +926,43 @@ def _aggregate_usage_tokens(usage: Any) -> int:
     )
 
 
+def _codex_usage_snapshot(
+    usage: Any, previous: dict[str, int] | None = None
+) -> dict[str, int]:
+    """Return the cumulative counters emitted by pinned Codex JSONL."""
+
+    prior = previous or {}
+    current = usage if isinstance(usage, dict) else {}
+    return {
+        key: int(current[key]) if key in current else int(prior.get(key, 0))
+        for key in _CODEX_USAGE_FIELDS
+    }
+
+
+def _codex_usage_has_counters(usage: Any) -> bool:
+    """Return whether a Codex record contains a cumulative token snapshot."""
+
+    return isinstance(usage, dict) and any(key in usage for key in _CODEX_USAGE_FIELDS)
+
+
+def _codex_usage_delta_tokens(
+    usage: Any,
+    previous: dict[str, int] | None,
+) -> tuple[int, dict[str, int]]:
+    """Convert one thread-cumulative Codex snapshot into runner-turn tokens."""
+
+    current = _codex_usage_snapshot(usage, previous)
+    if previous is not None:
+        regressions = [
+            key for key in _CODEX_USAGE_FIELDS if current[key] < previous.get(key, 0)
+        ]
+        if regressions:
+            fields = ", ".join(regressions)
+            raise ValueError(f"Codex cumulative token usage regressed: {fields}")
+    prior_total = _aggregate_usage_tokens(previous)
+    return _aggregate_usage_tokens(current) - prior_total, current
+
+
 def _codex_usage_violation(usage: Any) -> str | None:
     if not isinstance(usage, dict):
         return "Codex emitted malformed token usage"
@@ -1638,15 +1675,18 @@ def _record_driver_result(
     return cost
 
 
-def _historical_driver_totals(workdir: Path) -> tuple[list[float], int, int]:
+def _historical_driver_totals(
+    workdir: Path,
+) -> tuple[list[float], int, int, dict[str, dict[str, int]]]:
     """Recover enforceable trajectory totals across bounded runner restarts."""
 
     costs: list[float] = []
     tokens = 0
     turns: set[int] = set()
+    session_usage: dict[str, dict[str, int]] = {}
     events = workdir / "events.jsonl"
     if not events.is_file():
-        return costs, tokens, 0
+        return costs, tokens, 0, session_usage
     for line in events.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -1661,10 +1701,26 @@ def _historical_driver_totals(workdir: Path) -> tuple[list[float], int, int]:
         usage_violation = _codex_usage_violation(usage)
         if usage_violation is not None:
             raise RuntimeError("events.jsonl contains malformed Codex token usage")
-        tokens += _aggregate_usage_tokens(usage)
+        session_id = record.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            if _codex_usage_has_counters(usage):
+                try:
+                    turn_tokens, snapshot = _codex_usage_delta_tokens(
+                        usage, session_usage.get(session_id)
+                    )
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "events.jsonl contains regressed Codex token usage"
+                    ) from exc
+                tokens += turn_tokens
+                session_usage[session_id] = snapshot
+        else:
+            # Older telemetry did not identify a session and cannot be safely
+            # differenced, so preserve its original additive interpretation.
+            tokens += _aggregate_usage_tokens(usage)
         if not isinstance(usage, dict) or usage.get("cost_available") is not False:
             costs.append(float(record.get("total_cost_usd") or 0.0))
-    return costs, tokens, len(turns)
+    return costs, tokens, len(turns), session_usage
 
 
 def _historical_no_progress(workdir: Path, snapshot: GatewaySnapshot) -> int:
@@ -1762,10 +1818,16 @@ def _run_live(args: argparse.Namespace) -> int:
             session_id, resume = "", False
 
     if args.provider == "codex":
-        costs, total_tokens, historical_turns = _historical_driver_totals(workdir)
+        (
+            costs,
+            total_tokens,
+            historical_turns,
+            codex_session_usage,
+        ) = _historical_driver_totals(workdir)
         no_progress = _historical_no_progress(workdir, snapshot)
     else:
         costs, total_tokens, historical_turns = [], 0, 0
+        codex_session_usage = {}
         no_progress = 0
     total_cost = sum(costs)
     if historical_turns >= args.max_turns:
@@ -1876,6 +1938,7 @@ def _run_live(args: argparse.Namespace) -> int:
             }
         if not isinstance(result, dict):
             raise RuntimeError(f"{args.provider} driver did not return structured output")
+        usage_violation = None
         if args.provider == "codex":
             usage_violation = _codex_usage_violation(result.get("usage"))
             if usage_violation is not None:
@@ -1893,8 +1956,37 @@ def _run_live(args: argparse.Namespace) -> int:
                     "Codex driver rejected the turn: malformed token usage. "
                     "See private driver logs."
                 )
-        result_is_error = bool(result.get("is_error"))
         reported_session_id = str(result.get("session_id") or "")
+        turn_tokens = _aggregate_usage_tokens(result.get("usage"))
+        if (
+            args.provider == "codex"
+            and usage_violation is None
+            and _codex_usage_has_counters(result.get("usage"))
+        ):
+            try:
+                turn_tokens, usage_snapshot = _codex_usage_delta_tokens(
+                    result.get("usage"),
+                    codex_session_usage.get(reported_session_id),
+                )
+            except ValueError as exc:
+                violations = result.get("violations")
+                violation_list = (
+                    [str(item) for item in violations]
+                    if isinstance(violations, list)
+                    else []
+                )
+                violation_list.append(str(exc))
+                result["violations"] = list(dict.fromkeys(violation_list))
+                result["is_error"] = True
+                result["result"] = (
+                    "Codex driver rejected the turn: cumulative token usage regressed. "
+                    "See private driver logs."
+                )
+                turn_tokens = 0
+            else:
+                if reported_session_id:
+                    codex_session_usage[reported_session_id] = usage_snapshot
+        result_is_error = bool(result.get("is_error"))
         if not result_is_error and reported_session_id:
             session_id = reported_session_id
         cost_available = result.get("cost_available") is not False
@@ -1918,7 +2010,6 @@ def _run_live(args: argparse.Namespace) -> int:
         if cost_available:
             costs.append(turn_cost)
             total_cost += turn_cost
-        turn_tokens = _aggregate_usage_tokens(result.get("usage"))
         total_tokens += turn_tokens
         if cost_available:
             print(

@@ -1484,6 +1484,135 @@ def test_codex_live_path_skips_claude_auth_and_enforces_token_cap(monkeypatch, t
     assert telemetry["usage"]["cost_available"] is False
 
 
+@pytest.mark.parametrize(
+    ("cumulative_totals", "expected_calls"),
+    [
+        ([900_000, 1_050_000], 2),
+        ([100_000, 1_200_001, 1_300_000], 2),
+    ],
+)
+def test_codex_live_token_cap_uses_same_session_deltas(
+    monkeypatch, tmp_path, cumulative_totals, expected_calls
+):
+    snapshot = _snapshot()
+    calls = 0
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    def fake_codex_turn(*_args, **_kwargs):
+        nonlocal calls
+        total = cumulative_totals[calls]
+        calls += 1
+        return {
+            "session_id": "thread-stable",
+            "usage": {
+                "input_tokens": total,
+                "output_tokens": 0,
+                "cost_available": False,
+            },
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 1,
+            "is_error": False,
+            "result": "no commit",
+        }
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner_module, "run_codex_turn", fake_codex_turn)
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            str(len(cumulative_totals)),
+            "--turn-token-cap",
+            "1000000",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 0
+    assert calls == expected_calls
+
+
+def test_codex_live_cumulative_usage_regression_invalidates_session(
+    monkeypatch, tmp_path
+):
+    snapshot = _snapshot()
+    totals = iter((100, 99))
+    monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+
+    def fake_initialize(*_args, **_kwargs):
+        (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return tmp_path, snapshot
+
+    def fake_codex_turn(*_args, **_kwargs):
+        return {
+            "session_id": "thread-stable",
+            "usage": {
+                "input_tokens": next(totals),
+                "output_tokens": 0,
+                "cost_available": False,
+            },
+            "total_cost_usd": 0.0,
+            "cost_available": False,
+            "num_turns": 1,
+            "is_error": False,
+            "result": "no commit",
+        }
+
+    monkeypatch.setattr(runner_module, "initialize_workdir", fake_initialize)
+    monkeypatch.setattr(runner_module, "load_snapshot", lambda _workdir: snapshot)
+    monkeypatch.setattr(
+        runner_module, "_prepare_codex_home", lambda _workdir: tmp_path / "home"
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_prepare_codex_catalog",
+        lambda *_a, **_k: (tmp_path / "catalog.json", "digest", "codex-cli test"),
+    )
+    monkeypatch.setattr(runner_module, "_record_codex_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner_module, "run_codex_turn", fake_codex_turn)
+    args = parse_args(
+        [
+            "--game",
+            "bp35",
+            "--workdir",
+            str(tmp_path),
+            "--max-turns",
+            "2",
+            "--no-system-prompt",
+        ]
+    )
+
+    assert runner_module._run_live(args) == 1
+    checkpoint = json.loads(
+        (tmp_path / "sessions" / "sessions.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["invalidated"] is True
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    telemetry = [record for record in records if record["kind"] == "turn_telemetry"]
+    assert telemetry[-1]["is_error"] is True
+
+
 def test_missing_codex_rollout_starts_fresh_session(monkeypatch, tmp_path):
     monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
     snapshot = _snapshot()
@@ -1575,11 +1704,174 @@ def test_historical_driver_totals_recover_cost_tokens_and_turns(tmp_path):
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
     )
 
-    costs, tokens, turns = runner_module._historical_driver_totals(tmp_path)
+    costs, tokens, turns, session_usage = runner_module._historical_driver_totals(
+        tmp_path
+    )
 
     assert costs == [1.25]
     assert tokens == 35
     assert turns == 2
+    assert session_usage == {}
+
+
+def test_codex_cumulative_usage_recovers_ar25_turn_deltas(tmp_path):
+    totals = [
+        165_819,
+        345_926,
+        450_596,
+        610_085,
+        739_660,
+        876_435,
+        1_020_602,
+    ]
+    expected_deltas = [
+        165_819,
+        180_107,
+        104_670,
+        159_489,
+        129_575,
+        136_775,
+        144_167,
+    ]
+    records = []
+    for turn, total in enumerate(totals, start=1):
+        records.extend(
+            [
+                {"kind": "turn_started", "turn": turn},
+                {
+                    "kind": "turn_telemetry",
+                    "turn": turn,
+                    "session_id": "thread-ar25",
+                    "usage": {
+                        "input_tokens": total,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "cost_available": False,
+                    },
+                    "total_cost_usd": 0.0,
+                },
+            ]
+        )
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    costs, tokens, turns, session_usage = runner_module._historical_driver_totals(
+        tmp_path
+    )
+    deltas = []
+    previous = None
+    for total in totals:
+        delta, previous = runner_module._codex_usage_delta_tokens(
+            {"input_tokens": total}, previous
+        )
+        deltas.append(delta)
+
+    assert costs == []
+    assert tokens == 1_020_602
+    assert turns == 7
+    assert deltas == expected_deltas
+    assert max(deltas) == 180_107
+    assert session_usage["thread-ar25"]["input_tokens"] == 1_020_602
+
+
+def test_codex_cumulative_usage_resets_for_a_new_session(tmp_path):
+    records = [
+        {
+            "kind": "turn_telemetry",
+            "turn": 1,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 100, "cost_available": False},
+        },
+        {
+            "kind": "turn_telemetry",
+            "turn": 2,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 250, "cost_available": False},
+        },
+        {
+            "kind": "turn_telemetry",
+            "turn": 3,
+            "session_id": "thread-b",
+            "usage": {"input_tokens": 40, "cost_available": False},
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    _, tokens, _, session_usage = runner_module._historical_driver_totals(tmp_path)
+
+    assert tokens == 290
+    assert set(session_usage) == {"thread-a", "thread-b"}
+
+
+def test_codex_cumulative_usage_preserves_omitted_counters():
+    first_delta, previous = runner_module._codex_usage_delta_tokens(
+        {"input_tokens": 100, "output_tokens": 10}, None
+    )
+    second_delta, current = runner_module._codex_usage_delta_tokens(
+        {"input_tokens": 150}, previous
+    )
+
+    assert first_delta == 110
+    assert second_delta == 50
+    assert current["input_tokens"] == 150
+    assert current["output_tokens"] == 10
+
+
+def test_historical_codex_cumulative_usage_regression_fails_closed(tmp_path):
+    records = [
+        {
+            "kind": "turn_telemetry",
+            "turn": 1,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 100, "cost_available": False},
+        },
+        {
+            "kind": "turn_telemetry",
+            "turn": 2,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 99, "cost_available": False},
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="regressed Codex token usage"):
+        runner_module._historical_driver_totals(tmp_path)
+
+
+def test_historical_codex_unavailable_usage_preserves_session_baseline(tmp_path):
+    records = [
+        {
+            "kind": "turn_telemetry",
+            "turn": 1,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 100, "cost_available": False},
+        },
+        {
+            "kind": "turn_telemetry",
+            "turn": 2,
+            "session_id": "thread-a",
+            "usage": {"cost_available": False},
+        },
+        {
+            "kind": "turn_telemetry",
+            "turn": 3,
+            "session_id": "thread-a",
+            "usage": {"input_tokens": 160, "cost_available": False},
+        },
+    ]
+    (tmp_path / "events.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+    _, tokens, _, session_usage = runner_module._historical_driver_totals(tmp_path)
+
+    assert tokens == 160
+    assert session_usage["thread-a"]["input_tokens"] == 160
 
 
 def test_historical_no_progress_recovers_only_trailing_stalled_turns(tmp_path):
@@ -1758,6 +2050,20 @@ def test_timeout_with_completed_commit_stops_without_emitting_fallback(
 ):
     snapshot = _snapshot()
     monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "seq": 1,
+                "kind": "turn_telemetry",
+                "turn": 1,
+                "session_id": "thread-1",
+                "usage": {"input_tokens": 100, "cost_available": False},
+                "total_cost_usd": 0.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     committed = CommittedTurn(
         plan=[[3, None, None]],
         reason="probe",
@@ -1820,6 +2126,14 @@ def test_timeout_with_completed_commit_stops_without_emitting_fallback(
     assert runner_module._run_live(args) == 1
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert all(event["kind"] != "turn_fallback" for event in events)
+    telemetry = [event for event in events if event["kind"] == "turn_telemetry"]
+    assert not any(
+        "regressed" in str(violation)
+        for violation in telemetry[-1].get("violations", [])
+    )
+    _, tokens, _, session_usage = runner_module._historical_driver_totals(tmp_path)
+    assert tokens == 100
+    assert session_usage["thread-1"]["input_tokens"] == 100
     # A timeout recovers the thread id for diagnostics only. Its incomplete audit
     # stream makes that session untrusted, even when Locus durably committed.
     checkpoint = json.loads(
