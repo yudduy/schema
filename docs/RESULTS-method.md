@@ -236,6 +236,8 @@ The Luna adapter at `/private/tmp/schema-luna-driver-v1.py`, SHA-256 `85ece37270
 
 The first gate attempt used BP35 workdir `/private/tmp/schema-v9-bp35-luna.juqkFU` and external audit `/private/tmp/schema-v9-bp35-luna-audit.XqJIaW`. Its first invocation stopped at 12 actions with 79 paired Locus calls, 10 backtests, seven prediction-gated surprises, and clean scorer/guard/audits. The exact-session continuation reached 18 actions before the adapter rejected reads of the agent's own `events.jsonl` and other run-local logs. That denylist was not part of the released harness: Schema's released BP35 trace itself reads `events.jsonl` in 126 `run_python` calls. The attempt is archived as adapter-confounded diagnostic evidence, with no gameplay pass or failure attributed to v9 or Luna.
 
+The replacement faithful gate is frozen at workdir `/private/tmp/schema-v9-bp35-faithful.EgmtN3` with external audit `/private/tmp/schema-v9-bp35-faithful-audit.fNxlmR`, again capped at 21 actions. Passing requires level 0 within its 21-action human baseline, full-history replay green before the winning commit, and clean scorer, guard, session, and tool-surface audits. Failure is attributed only if the unchanged method reaches the cap without a clear; provider censorship remains resumable rather than a gameplay result.
+
 If BP35 passes, the same v9 bytes run unchanged on fresh cd82 and sc25 sessions. Each M3 game must finish `WIN`, clear 6/6 levels, score at least 90.00% RHAE, retain contiguous event and action indices, and pass the same audits. These are prospective local Public-set checks, not hidden-set evidence. Provider-censored runs may resume only their original workdir and exact Codex session; productive runs are never replaced.
 
 ```bash
