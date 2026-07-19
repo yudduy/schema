@@ -4,7 +4,7 @@ Status: active on `goal2`; experimental tooling expansion is frozen pending game
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **144 passed**.
+- `uv run pytest -q`: **146 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
@@ -19,7 +19,11 @@ Accordingly, no new inspector, hint, planner gate, or commit gate will be added 
 
 ## Luna runtime
 
-Commit `5bccf82` adds a subscription-backed GPT-5.6 Luna driver for Codex CLI `0.144.1`. It preserves persistent sessions across accepted turns, exposes only the exact 14 Locus tools, pins and rehashes the text-only model catalog, disables native capabilities, isolates refreshable ChatGPT authentication, and rejects incomplete, malformed, timed-out, dropped-event, or unapproved-tool streams. Rejected streams invalidate their session checkpoint; restart availability is verified from `session_meta.payload.id` rather than filenames. Dollar cost is explicitly unavailable, so durable token and turn caps are enforced instead. Luna autoreview found no actionable defect after iterative hardening (**0.84 confidence**); the full suite passes **144/144**. This is runtime evidence only, not gameplay evidence.
+Commit `5bccf82` adds a subscription-backed GPT-5.6 Luna driver for Codex CLI `0.144.1`. It preserves persistent sessions across accepted turns, exposes only the exact 14 Locus tools, pins and rehashes the text-only model catalog, disables native capabilities, isolates refreshable ChatGPT authentication, and rejects incomplete, malformed, timed-out, dropped-event, or unapproved-tool streams. Rejected streams invalidate their session checkpoint; restart availability is verified from `session_meta.payload.id` rather than filenames. Dollar cost is explicitly unavailable, so durable token and turn caps are enforced instead. Luna autoreview found no actionable defect after iterative hardening (**0.84 confidence**). This is runtime evidence only, not gameplay evidence.
+
+## Faithful-core freeze
+
+Commit `c627eb2` makes the released contract the default. Full-history calls return the contract summary and transition detail without the added inspector, topology, model-coaching, or click-proposal appendix. Commit-time topology, post-surprise repair, and mixed-RESET gates are also disabled; the released per-action prediction check and surprise halt remain unchanged. `--experimental-tooling` restores the complete intervention bundle for explicit ablations. The mode is frozen in common run metadata, the initial and per-turn MCP environments, and the Codex policy digest, so neither Claude nor Luna can drift on resume. Luna review found no actionable propagation defect (**0.95 confidence**); the full suite passes **146/146**.
 
 ## Candidate portfolio
 
@@ -122,5 +126,6 @@ The preregistered clean measurement then started `tu93` on SHA `48032bb`. Turn 1
 - `/tmp/schema-live-bp35-modelgate.PEiYiE` was discarded as an authentication failure: the cached Claude OAuth token had expired, producing three immediate 401 errors, zero tokens/actions/cost, and a clean audit. It contains no evidence about the model gate. Subsequent runner versions fail after the first such error.
 - `/tmp/schema-live-bp35-hardgate.CCUKlb` was discarded as a provider-limit failure: Claude reported a session cap on turn 1, with zero tokens/actions/cost and a clean audit. It contains no evidence about the hard gate.
 - The prior armed-repair-gate preflight and Opus `tu93` → conditional `ar25` preregistration are superseded. The gate has red-path mechanism evidence but no score gain; the user prospectively switched all testing to GPT-5.6 Luna, and a provider change cannot be attributed to the original pair. The Opus prefix is frozen rather than resumed.
-- A replacement Luna sequence will be committed before either game is initialized, after the faithful-core configuration is frozen; no clean-game run is authorized by this entry alone.
+- The replacement Luna sequence is now preregistered on `c627eb2`, before any listed workdir was initialized or any game source/trajectory was inspected. First run a contaminated BP35 plumbing check at `/private/tmp/schema-goal2-core-bp35.wldifZ`: GPT-5.6 Luna/max, faithful core, no standing system prompt, two total turns, 1,200 seconds/turn, 1,000,000 tokens/turn, 2,000,000 tokens/run, two no-progress turns, and `ONLY_RESET_LEVELS=true`. It must produce at least one legal action, a scorer-accepted stream, clean guard/driver audits, and an accepted persistent-session resume if turn 2 is reached; it is not performance evidence.
+- If the BP35 gate passes, run fresh `ar25` at `/private/tmp/schema-goal2-core-ar25.wAsafr`: the same model/core/no-prompt configuration, 120 total turns, 1,200 seconds/turn, 1,000,000 tokens/turn, 60,000,000 tokens/run, five no-progress turns, 3,000 actions, and reset-only mode. If and only if `ar25` reaches WIN, run unchanged `cn04` at `/private/tmp/schema-goal2-core-cn04.ucD2dy`. Both directories were empty when frozen; neither game source nor trajectory has been read. M2 requires a full clear and **RHAE >= 90.00%** on `ar25`; M3 requires the same on `cn04`. Provider failures may continue only the same trajectory under its persisted metadata; an integrity failure is never rerun or replaced.
 - M1–M3 remain unproven. Competitive held-out RHAE and two-game generalization are still required.
