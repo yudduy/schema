@@ -35,6 +35,41 @@ def _snapshot(*, history_len=0):
     )
 
 
+def _claude_stream(*, tools, calls=(), session_id="session", include_result=True):
+    records = [
+        {
+            "type": "system",
+            "subtype": "init",
+            "session_id": session_id,
+            "tools": list(tools),
+        }
+    ]
+    records.extend(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "id": f"call-{index}", "name": name, "input": {}}
+                ]
+            },
+        }
+        for index, name in enumerate(calls)
+    )
+    if include_result:
+        records.append(
+            {
+                "type": "result",
+                "session_id": session_id,
+                "usage": {},
+                "total_cost_usd": 0.0,
+                "num_turns": 1,
+                "is_error": False,
+                "result": "done",
+            }
+        )
+    return "\n".join(json.dumps(record) for record in records)
+
+
 def test_session_start_message_matches_contract_section_3(tmp_path):
     message = build_session_start_message(
         _snapshot(),
@@ -109,6 +144,7 @@ def test_mcp_config_is_strictly_one_locus_server_with_turn_environment(tmp_path)
     server = payload["mcpServers"]["locus"]
     assert server["command"] == sys.executable
     assert server["args"] == ["-m", "schema_harness.locus"]
+    assert server["alwaysLoad"] is True
     assert server["env"]["LOCUS_WORKDIR"] == str(tmp_path)
     assert server["env"]["LOCUS_TURN_ID"] == "turn-000007"
     assert server["env"]["LOCUS_TURN"] == "7"
@@ -176,10 +212,16 @@ def test_driver_appends_method_prompt_file(monkeypatch, tmp_path):
     prompt = tmp_path / "method.md"
     prompt.write_text("model, verify, plan, act", encoding="utf-8")
     observed = {}
+    allowed_tools = ("mcp__locus__commit_actions",)
 
     def fake_run(command, **kwargs):
         observed["command"] = command
-        return subprocess.CompletedProcess(command, 0, stdout='{"session_id":"s"}', stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=_claude_stream(tools=allowed_tools, session_id="session"),
+            stderr="",
+        )
 
     monkeypatch.setattr(driver_probe.subprocess, "run", fake_run)
     result = driver_probe.run_turn(
@@ -193,11 +235,148 @@ def test_driver_appends_method_prompt_file(monkeypatch, tmp_path):
         model="test-model",
         token=None,
         system_prompt_file=prompt,
+        allowed_tools=allowed_tools,
     )
 
     flag = observed["command"].index("--append-system-prompt-file")
     assert observed["command"][flag + 1] == str(prompt)
-    assert result == {"session_id": "s"}
+    tools = observed["command"].index("--tools")
+    assert observed["command"][tools + 1] == ""
+    assert "--disable-slash-commands" in observed["command"]
+    assert result["session_id"] == "session"
+    assert result["is_error"] is False
+
+
+def test_driver_loads_locus_tools_upfront_without_native_tool_search(
+    monkeypatch, tmp_path
+):
+    observed = {}
+    allowed_tools = ("mcp__locus__commit_actions",)
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=_claude_stream(tools=allowed_tools, session_id="session"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(driver_probe.subprocess, "run", fake_run)
+    driver_probe.run_turn(
+        "turn",
+        session_id="session",
+        resume=False,
+        cwd=tmp_path,
+        config_dir=tmp_path,
+        locus_log=tmp_path / "locus.jsonl",
+        mcp_cfg=tmp_path / "mcp.json",
+        model="test-model",
+        token=None,
+        allowed_tools=allowed_tools,
+    )
+
+    assert observed["env"]["ENABLE_TOOL_SEARCH"] == "false"
+    denied = observed["command"].index("--disallowed-tools")
+    assert observed["command"][denied + 1] == "Skill,ToolSearch,MCPSearch"
+    assert "--verbose" in observed["command"]
+    output = observed["command"].index("--output-format")
+    assert observed["command"][output + 1] == "stream-json"
+
+
+@pytest.mark.parametrize("name", runner_module.CLAUDE_LOCUS_TOOLS)
+def test_claude_stream_accepts_each_exact_locus_tool(name):
+    result = driver_probe.parse_stream(
+        _claude_stream(tools=runner_module.CLAUDE_LOCUS_TOOLS, calls=(name,)),
+        "",
+        returncode=0,
+        timed_out=False,
+        expected_session_id="session",
+        allowed_tools=runner_module.CLAUDE_LOCUS_TOOLS,
+    )
+
+    assert result["is_error"] is False
+    assert "violations" not in result
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "Skill",
+        "ToolSearch",
+        "ScheduleWakeup",
+        "Bash",
+        "mcp__foreign__read_file",
+        "mcp__locus__fabricated",
+    ),
+)
+def test_claude_stream_rejects_non_locus_tool_calls(name):
+    result = driver_probe.parse_stream(
+        _claude_stream(tools=runner_module.CLAUDE_LOCUS_TOOLS, calls=(name,)),
+        "",
+        returncode=0,
+        timed_out=False,
+        expected_session_id="session",
+        allowed_tools=runner_module.CLAUDE_LOCUS_TOOLS,
+    )
+
+    assert result["is_error"] is True
+    assert result["violations"] == [f"unapproved Claude tool call: {name!r}"]
+
+
+def test_claude_stream_rejects_advertised_native_tool_without_call():
+    result = driver_probe.parse_stream(
+        _claude_stream(tools=(*runner_module.CLAUDE_LOCUS_TOOLS, "ToolSearch")),
+        "",
+        returncode=0,
+        timed_out=False,
+        expected_session_id="session",
+        allowed_tools=runner_module.CLAUDE_LOCUS_TOOLS,
+    )
+
+    assert result["is_error"] is True
+    assert "unexpected=['ToolSearch']" in result["violations"][0]
+
+
+def test_claude_stream_rejects_malformed_or_incomplete_output():
+    result = driver_probe.parse_stream(
+        '{"type":"system"}\nnot-json',
+        "",
+        returncode=0,
+        timed_out=False,
+        expected_session_id="session",
+        allowed_tools=runner_module.CLAUDE_LOCUS_TOOLS,
+    )
+
+    assert result["is_error"] is True
+    assert result["violations"] == [
+        "malformed Claude stream record at line 2",
+        "Claude stream has 0 init records; expected exactly 1",
+        "Claude stream ended without a result record",
+    ]
+
+
+def test_claude_stream_rejects_native_activity_before_timeout():
+    result = driver_probe.parse_stream(
+        _claude_stream(
+            tools=runner_module.CLAUDE_LOCUS_TOOLS,
+            calls=("Skill",),
+            include_result=False,
+        ),
+        "",
+        returncode=-9,
+        timed_out=True,
+        expected_session_id="session",
+        allowed_tools=runner_module.CLAUDE_LOCUS_TOOLS,
+    )
+
+    assert result["timed_out"] is True
+    assert result["is_error"] is True
+    assert result["violations"] == [
+        "unapproved Claude tool call: 'Skill'",
+        "Claude exited -9 without a result record",
+    ]
 
 
 def test_workdir_snapshots_prompt_identity_and_rejects_method_drift(tmp_path):
@@ -299,14 +478,16 @@ def test_process_restart_recovers_session_and_last_commit(tmp_path):
 def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
     snapshot = _snapshot()
     calls = 0
+    observed_tools = None
 
     def fake_initialize(*_args, **_kwargs):
         (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
         return tmp_path, snapshot
 
     def fake_run_turn(*_args, **_kwargs):
-        nonlocal calls
+        nonlocal calls, observed_tools
         calls += 1
+        observed_tools = _kwargs["allowed_tools"]
         return {
             "session_id": "failed-session",
             "usage": {},
@@ -336,6 +517,8 @@ def test_live_runner_stops_after_first_driver_error(monkeypatch, tmp_path):
 
     assert runner_module._run_live(args) == 1
     assert calls == 1
+    assert observed_tools == runner_module.CLAUDE_LOCUS_TOOLS
+    assert len(observed_tools) == 14
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["kind"] for event in events].count("turn_started") == 1
     assert events[-1]["kind"] == "run_finished"

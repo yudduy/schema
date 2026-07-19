@@ -25,7 +25,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "schema_harness"
 
-from spikes.driver_probe import DISALLOWED, oauth_token, run_turn as run_claude_turn
+from spikes.driver_probe import oauth_token, run_turn as run_claude_turn
 
 from .events import (
     EventLog,
@@ -88,6 +88,7 @@ CODEX_LOCUS_TOOLS = (
     "mv",
     "rm",
 )
+CLAUDE_LOCUS_TOOLS = tuple(f"mcp__locus__{name}" for name in CODEX_LOCUS_TOOLS)
 _CODEX_DISABLED_FEATURES = (
     "shell_tool",
     "unified_exec",
@@ -642,6 +643,7 @@ def write_mcp_config(
                 "command": sys.executable,
                 "args": ["-m", "schema_harness.locus"],
                 "env": environment,
+                "alwaysLoad": True,
             }
         }
     }
@@ -1904,6 +1906,7 @@ def _run_live(args: argparse.Namespace) -> int:
                 effort=args.effort,
                 timeout=args.turn_timeout,
                 system_prompt_file=method_prompt,
+                allowed_tools=CLAUDE_LOCUS_TOOLS,
             )
         else:
             assert codex_home is not None and codex_catalog is not None
@@ -1925,17 +1928,6 @@ def _run_live(args: argparse.Namespace) -> int:
                 system_prompt_file=method_prompt,
                 experimental_tooling=args.experimental_tooling,
             )
-        if result is None:
-            result = {
-                "session_id": session_id,
-                "usage": {},
-                "total_cost_usd": 0.0,
-                "cost_available": True,
-                "num_turns": 0,
-                "is_error": False,
-                "timed_out": True,
-                "result": "",
-            }
         if not isinstance(result, dict):
             raise RuntimeError(f"{args.provider} driver did not return structured output")
         usage_violation = None
@@ -2115,8 +2107,7 @@ def _run_live(args: argparse.Namespace) -> int:
             print(f"stopping: run token cap {args.run_token_cap:,} reached")
             break
         if no_progress >= args.no_progress_turns:
-            suffix = " (timeouts)" if bool(result.get("timed_out")) else ""
-            print(f"stopping: no progress for {no_progress} turns{suffix}")
+            print(f"stopping: no progress for {no_progress} turns")
             break
         if next_snapshot.state == "WIN" or next_snapshot.history_len >= args.max_actions:
             break
@@ -2205,11 +2196,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--no-progress-turns must be positive")
     if args.context_rollover_tokens < 1:
         parser.error("--context-rollover-tokens must be positive")
-    # Keep the exact built-in denial list visibly coupled to the proven probe.
-    assert DISALLOWED == (
-        "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,"
-        "NotebookEdit,MultiEdit,BashOutput"
-    )
     return args
 
 
