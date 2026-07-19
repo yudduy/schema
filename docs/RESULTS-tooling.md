@@ -1,13 +1,25 @@
 # Tooling Experiment Results
 
-Status: active on `goal2`. No clean-game milestone is claimed yet.
+Status: active on `goal2`; experimental tooling expansion is frozen pending gameplay evidence. No clean-game milestone is claimed yet.
 
 ## Reproduced mechanics
 
-- `uv run pytest -q`: **85 passed**.
+- `uv run pytest -q`: **144 passed**.
 - Released bp35 replay: **9/9 levels, 93.51% RHAE**, with all **566 grids byte-identical**. Level actions were `19/47/36/22/59/42/57/67/217` versus the human baseline `21/48/44/38/33/87/86/131/163`.
 - Final scripted dry run: vendored scorer accepted; `audit_events` returned `clean=True` with no violations.
 - The public [Schema Harness report](https://schema-harness.github.io/) and its [aggregate trace manifest](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces) support score reproduction, but do not publish a runnable harness or enough discarded-attempt data to reproduce the reported live run procedure exactly.
+
+## Direction audit
+
+The current report strengthens, rather than weakens, the thin-harness thesis. It reports **98.98%** Public self-reported RHAE for the retained Opus 4.8/Fable 5 pairing and **95.35%** for the retained GPT-5.6 Sol xhigh/max pairing. The latter is counterevidence to an exact Claude pairing or an unpublished system prompt being the primary missing mechanism: a different frontier model nearly reproduced the score through the same outer loop.
+
+Goal2's matched evidence does not support its original tooling-bottleneck bet. The enriched arm used **53.3% fewer tool calls**, **83.3% fewer `run_python` calls**, and **29.5% less measured cost**, but both arms scored **0/9**. Every inspector, proposal, topology, and repair-gate run also remained 0/9. These changes may improve ergonomics, but none has improved levels or RHAE.
+
+Accordingly, no new inspector, hint, planner gate, or commit gate will be added without a preregistered level/RHAE ablation. Existing experimental scaffolds are frozen and will be disabled for the faithful-core baseline. Provider coverage is a real operational blocker to measuring long trajectories, not an established explanation for the final reasoning gap. The active direction is therefore: faithful core, isolated Luna execution, more complete measured coverage, and model-side theory discovery—not more harness policy.
+
+## Luna runtime
+
+Commit `5bccf82` adds a subscription-backed GPT-5.6 Luna driver for Codex CLI `0.144.1`. It preserves persistent sessions across accepted turns, exposes only the exact 14 Locus tools, pins and rehashes the text-only model catalog, disables native capabilities, isolates refreshable ChatGPT authentication, and rejects incomplete, malformed, timed-out, dropped-event, or unapproved-tool streams. Rejected streams invalidate their session checkpoint; restart availability is verified from `session_meta.payload.id` rather than filenames. Dollar cost is explicitly unavailable, so durable token and turn caps are enforced instead. Luna autoreview found no actionable defect after iterative hardening (**0.84 confidence**); the full suite passes **144/144**. This is runtime evidence only, not gameplay evidence.
 
 ## Candidate portfolio
 
@@ -109,6 +121,6 @@ The preregistered clean measurement then started `tu93` on SHA `48032bb`. Turn 1
 - `/tmp/schema-live-bp35-clicks.XzVOXO` was discarded as a provider-quota failure: three immediate session-limit exits, zero tokens/actions/cost, audit clean. It is not an experiment replicate.
 - `/tmp/schema-live-bp35-modelgate.PEiYiE` was discarded as an authentication failure: the cached Claude OAuth token had expired, producing three immediate 401 errors, zero tokens/actions/cost, and a clean audit. It contains no evidence about the model gate. Subsequent runner versions fail after the first such error.
 - `/tmp/schema-live-bp35-hardgate.CCUKlb` was discarded as a provider-limit failure: Claude reported a session cap on turn 1, with zero tokens/actions/cost and a clean audit. It contains no evidence about the hard gate.
-- Before held-out measurement, require one bounded bp35 turn in which the armed post-surprise gate observes a non-RESET commit. A provider error, no commit, empty queue, or RESET-only turn is inconclusive; scorer acceptance and a clean audit remain mandatory.
-- Preregistered clean sequence, before observing either game: run `tu93` first, then `ar25` only if `tu93` reaches M2. `ar25` is the lexicographically first vendored-roster game after excluding contaminated `bp35`, concurrently exposed `r11l`, and primary game `tu93`; no `ar25` source or trajectory was inspected. Freeze one SHA and configuration across both runs: Opus 4.8/max, 120 turns, $4/turn, $40/run, and `ONLY_RESET_LEVELS=true`. M3 requires full clears on both; preregistered competitive performance is **RHAE >= 90.00%** on each game.
+- The prior armed-repair-gate preflight and Opus `tu93` → conditional `ar25` preregistration are superseded. The gate has red-path mechanism evidence but no score gain; the user prospectively switched all testing to GPT-5.6 Luna, and a provider change cannot be attributed to the original pair. The Opus prefix is frozen rather than resumed.
+- A replacement Luna sequence will be committed before either game is initialized, after the faithful-core configuration is frozen; no clean-game run is authorized by this entry alone.
 - M1–M3 remain unproven. Competitive held-out RHAE and two-game generalization are still required.
