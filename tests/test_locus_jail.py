@@ -13,6 +13,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 import schema_harness.locus as locus
+from schema_harness.backtest import ALIGNMENT_BACKTEST_SELECTOR
 from schema_harness.locus import (
     COMMIT_MESSAGE,
     CROSS_TRANSITION_GATE_MESSAGE,
@@ -74,6 +75,43 @@ def _service(tmp_path: Path, **kwargs) -> LocusService:
         arcade=FakeArcade(),
         **kwargs,
     )
+
+
+def _green_backtest(selector: object) -> str:
+    label = (
+        "[all transitions]"
+        if selector == "all"
+        else "[full-history alignment]"
+    )
+    return (
+        f"backtest {label}: green; 0 mismatch(es), 0 skipped. "
+        "Model predicts ALL checkable transitions"
+    )
+
+
+def _install_stub_model(service: LocusService, source: str = "# model\n") -> Path:
+    path = service.workdir / "world_model_v1.py"
+    path.write_text(source, encoding="utf-8")
+    service.gateway.set_live_model(path)
+    return path
+
+
+def _matching_model(grid, _action, _x=None, _y=None):
+    return [[value + 1 for value in row] for row in grid], {}
+
+
+def _seed_stubbed_model_surprise(monkeypatch, tmp_path: Path) -> Path:
+    with _service(tmp_path, experimental_tooling=False) as service:
+        model_path = _install_stub_model(service)
+        monkeypatch.setattr(
+            service,
+            "_model_session",
+            lambda: lambda grid, _action, _x=None, _y=None: (grid, {}),
+        )
+        service.commit_actions([{"action": 3}], "seed surprise")
+        assert service.last_result is not None
+        assert service.last_result.halt_reason == "surprise"
+    return model_path
 
 
 def _seed_non_reset_model_surprise(tmp_path: Path) -> None:
@@ -178,22 +216,34 @@ def test_locus_service_default_bfs_timeout_is_600(tmp_path):
         assert service.bfs_timeout == 600
 
 
+def test_locus_service_default_backtest_timeout_is_120(tmp_path):
+    with _service(tmp_path) as service:
+        assert service.backtest_timeout == 120
+
+
 def test_locus_factory_env_default_bfs_timeout_is_600(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCUS_WORKDIR", str(tmp_path))
     monkeypatch.setenv("LOCUS_GAME", "jail-test")
     monkeypatch.setenv("LOCUS_TURN_ID", "turn-1")
     monkeypatch.delenv("LOCUS_BFS_TIMEOUT", raising=False)
+    monkeypatch.delenv("LOCUS_BACKTEST_TIMEOUT", raising=False)
 
     def fake_service(*_args, **kwargs):
-        return SimpleNamespace(bfs_timeout=kwargs["bfs_timeout"])
+        return SimpleNamespace(
+            bfs_timeout=kwargs["bfs_timeout"],
+            backtest_timeout=kwargs["backtest_timeout"],
+        )
 
     monkeypatch.setattr(locus, "LocusService", fake_service)
     monkeypatch.setattr(locus, "_SERVICE", None)
     assert locus._service().bfs_timeout == 600
+    assert locus._service().backtest_timeout == 120
 
     monkeypatch.setattr(locus, "_SERVICE", None)
     monkeypatch.setenv("LOCUS_BFS_TIMEOUT", "45")
+    monkeypatch.setenv("LOCUS_BACKTEST_TIMEOUT", "15")
     assert locus._service().bfs_timeout == 45.0
+    assert locus._service().backtest_timeout == 15.0
 
 
 def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
@@ -212,6 +262,10 @@ def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
                 "entrypoint": "step",
                 "has_is_goal": True,
             }
+        if operation == "backtest":
+            assert payload is not None
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
         assert payload is not None
         captured.append((payload["max_nodes"], timeout))
         return {"output": "captured"}
@@ -227,6 +281,373 @@ def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
             "advance", [], max_depth=1, max_nodes=500
         ) == "captured"
         assert captured[-1] == (500, service.bfs_timeout)
+
+
+def test_core_multi_action_commit_requires_green_model(monkeypatch, tmp_path):
+    events = tmp_path / "events.jsonl"
+    red_report = (
+        "backtest [all transitions]: 0/1 transitions fully correct; "
+        "1 mismatch(es), repair required"
+    )
+
+    def red_worker(operation, _model_path, payload=None, *, timeout):
+        assert operation == "backtest"
+        return red_report
+
+    with _service(
+        tmp_path,
+        events_path=events,
+        experimental_tooling=False,
+    ) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", red_worker)
+
+        output = service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "unvalidated plan",
+        )
+        assert output.startswith(locus.MODEL_VALIDATE_GATE_MESSAGE + "\n")
+        assert red_report in output
+        assert service._committed is False
+        assert service.last_result is None
+        assert service.gateway.timeline == ()
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert not any(record["kind"] == "turn_committed" for record in records)
+
+        retry = service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "retry unvalidated plan",
+        )
+        assert retry == output
+        assert retry != LOCK_MESSAGE
+
+
+def test_core_multi_action_commit_with_green_model_executes(monkeypatch, tmp_path):
+    def green_worker(operation, _model_path, payload=None, *, timeout):
+        assert operation == "backtest"
+        assert payload is not None
+        return _green_backtest(payload["selector"])
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", green_worker)
+        monkeypatch.setattr(service, "_model_session", lambda: _matching_model)
+
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "validated plan",
+        ) == COMMIT_MESSAGE.format(count=2)
+        assert service.last_result is not None
+        assert service.last_result.executed == 2
+        assert len(service.gateway.timeline) == 2
+
+
+def test_core_single_action_commit_allowed_with_red_model(monkeypatch, tmp_path):
+    operations = []
+
+    def red_worker(operation, _model_path, payload=None, *, timeout):
+        operations.append(operation)
+        return "red"
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", red_worker)
+        monkeypatch.setattr(service, "_model_session", lambda: _matching_model)
+
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+        assert len(service.gateway.timeline) == 1
+        assert "backtest" not in operations
+
+
+def test_core_multi_action_commit_without_model_rejected(tmp_path):
+    with _service(tmp_path, experimental_tooling=False) as service:
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "model-free plan",
+        ) == locus.MODEL_REQUIRED_GATE_MESSAGE
+        assert service._committed is False
+        assert service.gateway.timeline == ()
+
+        assert service.commit_actions([{"action": 3}], "single probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+        assert len(service.gateway.timeline) == 1
+
+
+def test_core_pure_reset_queue_bypasses_validate_gate(tmp_path):
+    for index, actions in enumerate(
+        ([{"action": 0}], [{"action": 0}, {"action": 0}])
+    ):
+        with _service(
+            tmp_path / f"pure-reset-{index}",
+            experimental_tooling=False,
+        ) as service:
+            assert service.commit_actions(actions, "pure reset") == (
+                COMMIT_MESSAGE.format(count=len(actions))
+            )
+
+    with _service(tmp_path / "mixed-reset", experimental_tooling=False) as service:
+        assert service.commit_actions(
+            [{"action": 0}, {"action": 3}],
+            "mixed reset queue",
+        ) == locus.MODEL_REQUIRED_GATE_MESSAGE
+        assert service.gateway.timeline == ()
+
+
+def test_validate_gate_result_cached_per_model_and_history(monkeypatch, tmp_path):
+    operations = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        assert payload is not None
+        if operation == "backtest":
+            operations.append((operation, payload["selector"]))
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
+        operations.append((operation, None))
+        return {"output": "bfs ran"}
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        monkeypatch.setattr(service, "_model_session", lambda: _matching_model)
+
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "cached validation",
+        ) == COMMIT_MESSAGE.format(count=2)
+
+    assert [item for item in operations if item[0] == "backtest"] == [
+        ("backtest", "all"),
+        ("backtest", ALIGNMENT_BACKTEST_SELECTOR),
+    ]
+    assert sum(item[0] == "bfs" for item in operations) == 2
+
+
+def test_validate_gate_cache_invalidated_on_model_change(monkeypatch, tmp_path):
+    selectors = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        assert payload is not None
+        if operation == "backtest":
+            selectors.append(payload["selector"])
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
+        return {"output": "bfs ran"}
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        model_path = _install_stub_model(service, "# model version one\n")
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+
+        model_path.write_text("# model version two\n", encoding="utf-8")
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+
+    assert selectors == [
+        "all",
+        ALIGNMENT_BACKTEST_SELECTOR,
+        "all",
+        ALIGNMENT_BACKTEST_SELECTOR,
+    ]
+
+
+def test_validate_gate_cache_invalidated_on_history_growth(monkeypatch, tmp_path):
+    backtest_history_lengths = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        assert payload is not None
+        if operation == "backtest":
+            backtest_history_lengths.append(len(payload["history"]["actions"]))
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
+        return {"output": "bfs ran"}
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+
+        service.gateway.commit(
+            "history-growth",
+            [{"action": 3}],
+            "grow history",
+            live_model=_matching_model,
+        )
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+
+    assert backtest_history_lengths == [0, 0, 1, 1]
+
+
+def test_validate_gate_timeout_rejects_without_caching(monkeypatch, tmp_path):
+    calls = []
+
+    def timeout_worker(operation, _model_path, payload=None, *, timeout):
+        assert operation == "backtest"
+        calls.append(timeout)
+        raise locus._ModelWorkerTimeout
+
+    with _service(
+        tmp_path,
+        experimental_tooling=False,
+        backtest_timeout=0.25,
+    ) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", timeout_worker)
+
+        for reason in ("first attempt", "second attempt"):
+            output = service.commit_actions(
+                [{"action": 3}, {"action": 3}],
+                reason,
+            )
+            assert output.startswith(locus.MODEL_VALIDATE_GATE_MESSAGE + "\n")
+            assert "timed out after 0.25s" in output
+            assert service._committed is False
+
+    assert calls == [0.25, 0.25]
+
+
+def test_run_bfs_rejected_on_red_model_with_repair_report(monkeypatch, tmp_path):
+    red_report = (
+        "backtest [all transitions]: 0/1 transitions fully correct; "
+        "1 mismatch(es), repair required"
+    )
+    operations = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        operations.append(operation)
+        assert operation == "backtest"
+        return red_report
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        output = service.run_bfs("advance", [], max_depth=1)
+
+    assert output == locus.MODEL_VALIDATE_GATE_MESSAGE + "\n" + red_report
+    assert operations == ["backtest"]
+
+
+def test_run_bfs_runs_on_green_model(monkeypatch, tmp_path):
+    operations = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        assert payload is not None
+        operations.append((operation, payload.get("selector"), timeout))
+        if operation == "backtest":
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
+        return {"output": "bfs ran"}
+
+    with _service(
+        tmp_path,
+        experimental_tooling=False,
+        backtest_timeout=12,
+        bfs_timeout=34,
+    ) as service:
+        _install_stub_model(service)
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        assert service.run_bfs("advance", [], max_depth=1) == "bfs ran"
+
+    assert operations == [
+        ("backtest", "all", 12),
+        ("backtest", ALIGNMENT_BACKTEST_SELECTOR, 12),
+        ("bfs", None, 34),
+    ]
+
+
+def test_model_without_is_goal_green_backtest_commits_but_no_bfs(
+    monkeypatch,
+    tmp_path,
+):
+    backtest_selectors = []
+
+    def worker(operation, _model_path, payload=None, *, timeout):
+        assert payload is not None
+        if operation == "backtest":
+            backtest_selectors.append(payload["selector"])
+            return _green_backtest(payload["selector"])
+        assert operation == "bfs"
+        return {"error": "no_is_goal"}
+
+    with _service(tmp_path, experimental_tooling=False) as service:
+        _install_stub_model(
+            service,
+            "def step(grid, action, x=None, y=None):\n    return grid, {}\n",
+        )
+        monkeypatch.setattr(service, "_run_model_worker", worker)
+        monkeypatch.setattr(service, "_model_session", lambda: _matching_model)
+
+        with pytest.raises(RuntimeError, match="no is_goal"):
+            service.run_bfs("advance", [], max_depth=1)
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "model without goal predicate",
+        ) == COMMIT_MESSAGE.format(count=2)
+        assert service.last_result is not None
+        assert service.last_result.executed == 2
+
+    assert backtest_selectors == ["all", ALIGNMENT_BACKTEST_SELECTOR]
+
+
+def test_experimental_mode_does_not_duplicate_repair_report(monkeypatch, tmp_path):
+    _seed_stubbed_model_surprise(monkeypatch, tmp_path)
+
+    red_report = (
+        "backtest [all transitions]: 0/1 transitions fully correct; "
+        "1 mismatch(es), repair required"
+    )
+    backtest_calls = []
+
+    def red_worker(operation, _model_path, payload=None, *, timeout):
+        assert operation == "backtest"
+        backtest_calls.append(operation)
+        return red_report
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+        experimental_tooling=True,
+    ) as service:
+        service._full_history_read = True
+        monkeypatch.setattr(service, "_run_model_worker", red_worker)
+        output = service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "retry stale model",
+        )
+
+    assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+    assert output.count(red_report) == 1
+    assert locus.MODEL_VALIDATE_GATE_MESSAGE not in output
+    assert backtest_calls == ["backtest"]
+
+
+def test_experimental_repair_gate_without_model_keeps_core_required_gate(
+    monkeypatch,
+    tmp_path,
+):
+    model_path = _seed_stubbed_model_surprise(monkeypatch, tmp_path)
+    model_path.unlink()
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+        experimental_tooling=True,
+    ) as service:
+        service._full_history_read = True
+        output = service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "retry without model",
+        )
+
+    assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+    assert locus.MODEL_REQUIRED_GATE_MESSAGE in output
 
 
 def test_process_tools_apply_os_sandbox_and_keep_normal_workdir_use(tmp_path):
@@ -700,24 +1121,28 @@ def test_cross_transition_gate_is_transactional_and_full_history_unlocks(
 
 
 @pytest.mark.parametrize(
-    ("actions", "count"),
-    [([], 0), ([{"action": 0}, {"action": 3}], 2)],
+    ("actions", "expected"),
+    [
+        ([], COMMIT_MESSAGE.format(count=0)),
+        # Mixed RESET bypasses the experimental topology gate, but not the core gate.
+        ([{"action": 0}, {"action": 3}], None),
+    ],
 )
 def test_cross_transition_gate_exempts_empty_and_reset_first_queues(
     monkeypatch,
     tmp_path,
     actions,
-    count,
+    expected,
 ):
     monkeypatch.setattr(
         LocusService,
         "_new_affordance_topology",
         lambda _service: "new topology",
     )
+    if expected is None:
+        expected = locus.MODEL_REQUIRED_GATE_MESSAGE
     with _service(tmp_path) as service:
-        assert service.commit_actions(actions, "reset or stop") == (
-            COMMIT_MESSAGE.format(count=count)
-        )
+        assert service.commit_actions(actions, "reset or stop") == expected
 
 
 def test_cross_transition_gate_fails_open_on_inspector_error(monkeypatch, tmp_path):
