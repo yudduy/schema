@@ -82,22 +82,19 @@ def _align_model(
             grid = actual_grid
             continue
         set_current_level(model, level)
-        try:
-            _, _, state = call_predict(
-                model,
-                state,
-                grid,
-                action,
-                raw.get("x"),
-                raw.get("y"),
-            )
-            ingest = getattr(model, "ingest", None)
-            if callable(ingest):
-                ingested = ingest(state, actual_grid)
-                if ingested is not None:
-                    state = ingested
-        except Exception:
-            state = call_init_state(model, actual_grid)
+        _, _, state = call_predict(
+            model,
+            state,
+            grid,
+            action,
+            raw.get("x"),
+            raw.get("y"),
+        )
+        ingest = getattr(model, "ingest", None)
+        if callable(ingest):
+            ingested = ingest(state, actual_grid)
+            if ingested is not None:
+                state = ingested
         grid = actual_grid
         if bool(_transition_value(raw, "level_up")):
             level = int(_transition_value(raw, "level"))
