@@ -201,6 +201,11 @@ def test_context_rollover_uses_iteration_occupancy_not_aggregate_usage():
     assert runner_module._usage_tokens(usage) == 78_541
 
 
+def test_default_system_prompt_is_v9_matched_transfer():
+    assert runner_module.DEFAULT_SYSTEM_PROMPT.name == "physicist_v9_matched_transfer.md"
+    assert runner_module.DEFAULT_SYSTEM_PROMPT.is_file()
+
+
 def test_short_public_game_id_is_canonicalized_for_scoring(tmp_path):
     args = parse_args(["--dry-run", "--game", "r11l", "--workdir", str(tmp_path)])
 
@@ -536,11 +541,11 @@ def test_live_run_lock_rejects_overlap_and_releases(tmp_path):
         pass
 
 
-def test_default_live_provider_is_luna_max(tmp_path):
+def test_default_live_provider_is_sol_max(tmp_path):
     args = parse_args(["--workdir", str(tmp_path), "--no-system-prompt"])
 
     assert args.provider == "codex"
-    assert args.model == "gpt-5.6-luna"
+    assert args.model == "gpt-5.6-sol"
     assert args.effort == "max"
     assert args.experimental_tooling is False
 
@@ -609,7 +614,7 @@ def test_invalid_codex_effort_does_not_initialize_workdir(monkeypatch, tmp_path)
             "--workdir",
             str(tmp_path),
             "--effort",
-            "ultra",
+            "hyper",
             "--no-system-prompt",
         ]
     )
@@ -1379,6 +1384,44 @@ def test_codex_catalog_pins_text_only_luna_metadata(monkeypatch, tmp_path):
         )
 
 
+def test_ultra_effort_accepted_when_catalog_supports_it(monkeypatch, tmp_path):
+    catalog = {
+        "models": [
+            {
+                "slug": "gpt-5.6-sol",
+                "input_modalities": ["text", "image"],
+                "supports_image_detail_original": True,
+                "multi_agent_version": "v1",
+                "tool_mode": "code_mode_only",
+                "experimental_supported_tools": ["native"],
+                "supported_reasoning_levels": [
+                    {"effort": "max"},
+                    {"effort": "ultra"},
+                ],
+            }
+        ]
+    }
+
+    def fake_run(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(
+                command, 0, f"{runner_module.VALIDATED_CODEX_CLI_VERSION}\n", ""
+            )
+        return subprocess.CompletedProcess(command, 0, json.dumps(catalog), "")
+
+    monkeypatch.setattr(runner_module.shutil, "which", lambda _name: "/opt/bin/codex")
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    path, _digest, _version = runner_module._prepare_codex_catalog(
+        tmp_path,
+        codex_home=tmp_path / "home",
+        model="gpt-5.6-sol",
+        effort="ultra",
+    )
+
+    selected = json.loads(path.read_text(encoding="utf-8"))["models"][0]
+    assert selected["multi_agent_version"] is None
+
+
 def test_codex_catalog_replaces_fresh_preseed_and_detects_resume_tamper(
     monkeypatch, tmp_path
 ):
@@ -1662,7 +1705,7 @@ def test_codex_live_path_skips_claude_auth_and_enforces_token_cap(monkeypatch, t
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     started = next(event for event in events if event["kind"] == "run_started")
     assert started["provider"] == "codex"
-    assert started["model"] == "gpt-5.6-luna"
+    assert started["model"] == "gpt-5.6-sol"
     telemetry = next(event for event in events if event["kind"] == "turn_telemetry")
     assert telemetry["usage"]["cost_available"] is False
 

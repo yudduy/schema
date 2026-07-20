@@ -44,16 +44,18 @@ from .narration import commit_result_narration, world_model_line
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GAME = "bp35-0a0ad940"
 DEFAULT_PROVIDER = "codex"
-DEFAULT_CODEX_MODEL = "gpt-5.6-luna"
+DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MODEL = DEFAULT_CODEX_MODEL
 DEFAULT_CODEX_EFFORT = "max"
 DEFAULT_CODEX_COMPACT_TOKENS = 240_000
 VALIDATED_CODEX_CLI_VERSION = "codex-cli 0.144.1"
 _CODEX_REASONING_EFFORTS = frozenset(
-    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 )
-DEFAULT_SYSTEM_PROMPT = REPO_ROOT / "schema_harness" / "prompts" / "physicist_v1.md"
+DEFAULT_SYSTEM_PROMPT = (
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v9_matched_transfer.md"
+)
 NOTES_TEMPLATE = """# Notes — your living scratchpad (shown to you every turn).
 # Keep it CONCISE; edit and PRUNE stale entries with write_file / edit_file as you learn.
 
