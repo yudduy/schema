@@ -1,31 +1,25 @@
 # Repository Guidelines
 
-## Multi-agent coordination — READ FIRST
+## Working rules
 
-Two agents run in this **same working tree at once**, each with a different goal.
-Identify yourself by your active goal file, then stay inside that lane:
+The two-lane experiment (METHOD/TOOLING) is finished and consolidated. Charters are
+archived at `docs/GOAL1.md` / `docs/GOAL2.md`, lane ledgers at `docs/RESULTS-method.md` /
+`docs/RESULTS-tooling.md`, and lane history under the `archive/goal1`, `archive/goal2`,
+and `archive/two-lane-base` tags.
 
-- **METHOD agent** (`GOAL1.md`) — owns the agent's *reasoning*. Edit only
-  `schema_harness/prompts/**`, the system-prompt wiring in `runner.py`,
-  `docs/RESULTS-method.md`, and method-focused tests.
-- **TOOLING agent** (`GOAL2.md`) — owns the harness *machinery*. Edit only
-  `schema_harness/{backtest,bfs,model_loader,locus,gateway,inspectors,guard}.py`,
-  `spikes/driver_probe.py`, the runtime/session/budget wiring in `runner.py`,
-  `docs/RESULTS-tooling.md`, and tooling tests.
-
-Rules that keep the shared tree from corrupting (all mandatory):
-
-1. **Stay in your lane.** Never edit the other agent's files or its RESULTS ledger.
-   `docs/contract.md` is frozen — treat it as read-only.
-2. **Never `git add -A` / `git add .` / `git commit -a`.** The other agent has
-   uncommitted work in this tree; stage only your own files by explicit path.
-3. **`runner.py` is shared** — edit only your own section, keep it small, and commit
-   it immediately so the other agent rebuilds on your version.
-4. **Commit small and often**, green tests first (`uv run pytest -q`), tagging your
-   direction in the Conventional-Commit scope: `feat(method): …` / `fix(tooling): …`.
-5. **One live subscription run at a time.** Another Opus pilot may already be running;
-   never launch an overlapping live game run — record your live runs in your ledger
-   and check the other ledger before starting one.
+1. Single branch (`main`), single working tree. `docs/contract.md` stays frozen —
+   treat it as read-only.
+2. Commit via `committer "<msg>" <file...>` — it stages only the named paths
+   (renames need both old and new paths). Never `git add -A` / `git add .` /
+   `git commit -a`; no amend.
+3. Conventional Commits; commit small and often, green tests first
+   (`uv run pytest -q`); behavior changes land tests before implementation.
+4. **One live run at a time.** The runner enforces a global lock at
+   `$TMPDIR/schema-harness-live-<uid>.lock`; never work around it.
+5. Live codex runs are pinned to exactly `codex-cli 0.144.1`; do not upgrade the
+   CLI without revalidating the runner's catalog handling.
+6. Deep-BFS runs (600s default BFS budget) should pass `--turn-timeout 3600` so a
+   BFS call plus model work fits inside the per-turn/tool timeout.
 
 ## Project Structure & Module Organization
 
@@ -51,8 +45,8 @@ Tests use pytest. Name files and functions `test_*.py` and `test_<expected_behav
 
 ## Commit & Pull Request Guidelines
 
-The repository has no commit history yet. Start with concise Conventional Commit messages such as `fix: preserve replay sequence numbers`, and keep each commit scoped to one concern. Pull requests should explain the motivation and behavioral impact, link relevant issues, list verification commands, and call out contract or fixture changes. Include terminal screenshots only when rendered output changes.
+Use concise Conventional Commit messages such as `fix: preserve replay sequence numbers`, and keep each commit scoped to one concern. Pull requests should explain the motivation and behavioral impact, link relevant issues, list verification commands, and call out contract or fixture changes. Include terminal screenshots only when rendered output changes.
 
 ## Security & Configuration
 
-Copy `.env.example` to `.env` when an ARC API key is needed; anonymous access is supported. Never commit `.env`, API keys, downloaded environments, recordings, or per-run credentials. Use `ONLY_RESET_LEVELS=true` for parity-sensitive harness runs as specified in `docs/contract.md`.
+Copy `.env.example` to `.env` when an ARC API key is needed; anonymous access is supported. Never commit `.env`, API keys, downloaded environments, recordings, or per-run credentials. Use `ONLY_RESET_LEVELS=true` for parity-sensitive harness runs as specified in `docs/contract.md` — it is mandatory for codex live runs (the runner refuses without it) and for `spikes/replay_parity.py` (parity goes RED without it).
