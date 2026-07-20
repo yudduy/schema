@@ -152,6 +152,37 @@ def test_mcp_config_is_strictly_one_locus_server_with_turn_environment(tmp_path)
     assert server["env"]["SCHEMA_EXPERIMENTAL_TOOLING"] == "false"
 
 
+def test_locus_environment_forwards_timeout_overrides(monkeypatch, tmp_path):
+    overrides = {
+        "LOCUS_BFS_TIMEOUT": "900",
+        "LOCUS_BACKTEST_TIMEOUT": "180",
+        "LOCUS_PROCESS_TIMEOUT": "45",
+    }
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+
+    environment = runner_module._locus_environment(
+        tmp_path,
+        game="bp35-0a0ad940",
+        turn=7,
+        turn_id="turn-000007",
+        max_actions=3000,
+    )
+
+    assert {key: environment[key] for key in overrides} == overrides
+
+    for key in overrides:
+        monkeypatch.delenv(key)
+    default_environment = runner_module._locus_environment(
+        tmp_path,
+        game="bp35-0a0ad940",
+        turn=7,
+        turn_id="turn-000007",
+        max_actions=3000,
+    )
+    assert overrides.keys().isdisjoint(default_environment)
+
+
 def test_fresh_rollover_session_reinjects_notes_and_file_map(tmp_path):
     previous = CommittedTurn(
         plan=[[6, 39, 33]],
