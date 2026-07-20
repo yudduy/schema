@@ -234,7 +234,7 @@ class LocusService:
         gateway: PersistentGateway | None = None,
         arcade: Any | None = None,
         process_timeout: float = 30,
-        bfs_timeout: float = 30,
+        bfs_timeout: float = 600,
         clock: Callable[[], float] = time.time,
         debug_log: str | os.PathLike[str] | None = None,
         experimental_tooling: bool | None = None,
@@ -840,7 +840,7 @@ class LocusService:
             legal = tuple(
                 action for action in self.gateway.gateway.legal_actions if action not in (0, 6)
             )
-            nodes = 100_000 if max_nodes is None else max_nodes
+            nodes = 1_000_000 if max_nodes is None else max_nodes
             try:
                 result = self._run_model_worker(
                     "bfs",
@@ -1366,7 +1366,7 @@ def _service() -> LocusService:
             max_actions=int(os.environ.get("LOCUS_MAX_ACTIONS", "3000")),
             events_path=os.environ.get("LOCUS_EVENTS"),
             process_timeout=float(os.environ.get("LOCUS_PROCESS_TIMEOUT", "30")),
-            bfs_timeout=float(os.environ.get("LOCUS_BFS_TIMEOUT", "30")),
+            bfs_timeout=float(os.environ.get("LOCUS_BFS_TIMEOUT", "600")),
             debug_log=os.environ.get("LOCUS_LOG"),
         )
     return _SERVICE
