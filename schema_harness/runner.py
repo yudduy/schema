@@ -684,7 +684,13 @@ def _locus_environment(
         # Claude needs the OAuth token; the spawned MCP/tool subprocesses do not.
         "CLAUDE_CODE_OAUTH_TOKEN": "",
     }
-    for key in ("SCHEMA_ENVIRONMENTS_DIR", "ONLY_RESET_LEVELS"):
+    for key in (
+        "SCHEMA_ENVIRONMENTS_DIR",
+        "ONLY_RESET_LEVELS",
+        "LOCUS_BFS_TIMEOUT",
+        "LOCUS_BACKTEST_TIMEOUT",
+        "LOCUS_PROCESS_TIMEOUT",
+    ):
         if key in os.environ:
             environment[key] = os.environ[key]
     return environment

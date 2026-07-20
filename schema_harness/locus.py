@@ -1416,6 +1416,16 @@ _SERVICE: LocusService | None = None
 
 def _service() -> LocusService:
     global _SERVICE
+
+    def _env_float(name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
     if _SERVICE is None:
         workdir = os.environ.get("LOCUS_WORKDIR")
         game = os.environ.get("LOCUS_GAME")
@@ -1429,9 +1439,9 @@ def _service() -> LocusService:
             turn=int(os.environ.get("LOCUS_TURN", "0")),
             max_actions=int(os.environ.get("LOCUS_MAX_ACTIONS", "3000")),
             events_path=os.environ.get("LOCUS_EVENTS"),
-            process_timeout=float(os.environ.get("LOCUS_PROCESS_TIMEOUT", "30")),
-            bfs_timeout=float(os.environ.get("LOCUS_BFS_TIMEOUT", "600")),
-            backtest_timeout=float(os.environ.get("LOCUS_BACKTEST_TIMEOUT", "120")),
+            process_timeout=_env_float("LOCUS_PROCESS_TIMEOUT", 30.0),
+            bfs_timeout=_env_float("LOCUS_BFS_TIMEOUT", 600.0),
+            backtest_timeout=_env_float("LOCUS_BACKTEST_TIMEOUT", 120.0),
             debug_log=os.environ.get("LOCUS_LOG"),
         )
     return _SERVICE
