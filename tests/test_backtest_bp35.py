@@ -12,8 +12,9 @@ terminal-grid skip) matches theirs.
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 
-from schema_harness.backtest import run_backtest
+from schema_harness.backtest import ALIGNMENT_BACKTEST_SELECTOR, run_backtest
 from schema_harness.model_loader import load_model
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,121 @@ SNAPSHOTS = [
     ("bp35_cleared_level_4.py", 182),  # through L4 clear (spans deaths + resets)
     ("bp35_cleared_level_7.py", 348),  # through L7 clear (8 levels, 7 level-ups)
 ]
+
+
+def _tiny_history() -> dict[str, object]:
+    return {
+        "initial_turn": {"grid": [[0]], "level": 0, "win_levels": 1},
+        "actions": [
+            {
+                "step_index": index,
+                "action": 3,
+                "x": None,
+                "y": None,
+                "grid": [[index + 1]],
+                "level": 0,
+                "level_up": False,
+                "dead": False,
+                "win": False,
+            }
+            for index in range(3)
+        ],
+    }
+
+
+def _correct_stateful_model(
+    *,
+    ingest_fails_on: list[list[int]] | None = None,
+    predict_wrong_on: list[list[int]] | None = None,
+) -> ModuleType:
+    model = ModuleType("test_backtest_model")
+
+    def init_state(entry_grid: list[list[int]]) -> int:
+        return entry_grid[0][0]
+
+    def predict(
+        state: int,
+        grid: list[list[int]],
+        _action: int,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> tuple[list[list[int]], dict[str, bool], int]:
+        del x, y
+        predicted = (
+            [[99]]
+            if grid == predict_wrong_on
+            else [[value + 1 for value in row] for row in grid]
+        )
+        return predicted, {}, state + 1
+
+    def ingest(state: int, actual_grid: list[list[int]]) -> int:
+        if actual_grid == ingest_fails_on:
+            raise ValueError("ingest alignment crash")
+        return state
+
+    model.init_state = init_state
+    model.predict = predict
+    model.ingest = ingest
+    return model
+
+
+def test_alignment_backtest_records_ingest_crash():
+    report = run_backtest(
+        _correct_stateful_model(ingest_fails_on=[[2]]),
+        _tiny_history(),
+        selector=ALIGNMENT_BACKTEST_SELECTOR,
+    )
+
+    assert report.checked == 3
+    assert report.correct == 2
+    assert report.mismatch_count == 1
+    assert report.correct == report.checked - report.mismatch_count
+    assert report.ok is False
+    assert (
+        report.details[0].index,
+        report.details[0].kinds,
+        report.details[0].error,
+    ) == (1, ("ingest",), "ingest: ValueError: ingest alignment crash")
+    assert "; 1 mismatch(es)," in str(report)
+    assert "Model predicts ALL checkable transitions" not in str(report)
+
+
+def test_working_ingest_and_all_selector_stay_green():
+    reports = (
+        run_backtest(
+            _correct_stateful_model(),
+            _tiny_history(),
+            selector=ALIGNMENT_BACKTEST_SELECTOR,
+        ),
+        run_backtest(
+            _correct_stateful_model(ingest_fails_on=[[2]]),
+            _tiny_history(),
+            selector="all",
+        ),
+    )
+
+    for report in reports:
+        assert report.ok
+        assert report.correct == report.checked == 3
+        assert report.mismatch_count == 0
+
+
+def test_ingest_crash_does_not_double_count_existing_transition_mismatch():
+    report = run_backtest(
+        _correct_stateful_model(
+            ingest_fails_on=[[2]],
+            predict_wrong_on=[[1]],
+        ),
+        _tiny_history(),
+        selector=ALIGNMENT_BACKTEST_SELECTOR,
+    )
+
+    assert report.checked == 3
+    assert report.correct == 2
+    assert report.mismatch_count == 1
+    assert [(detail.index, detail.kinds) for detail in report.details] == [
+        (1, ("grid",)),
+    ]
 
 
 def test_snapshots_backtest_green_over_their_certified_windows():
