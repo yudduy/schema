@@ -414,7 +414,18 @@ def run_backtest(
                     ingested = ingest(state, transition.grid)
                     if ingested is not None:
                         state = ingested
-                except Exception:
+                except Exception as exc:
+                    if selected and not any(
+                        mismatch.index == transition.index
+                        for mismatch in mismatches
+                    ):
+                        mismatches.append(
+                            BacktestMismatch(
+                                transition.index,
+                                ("ingest",),
+                                f"ingest: {type(exc).__name__}: {exc}",
+                            )
+                        )
                     set_current_level(model, segment_level)
                     state = call_init_state(model, transition.grid)
         if transition.level_up:
