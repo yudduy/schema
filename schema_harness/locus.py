@@ -9,6 +9,7 @@ the service's path checks. Unsupported hosts fail closed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,17 @@ MODEL_REPAIR_GATE_MESSAGE = (
     "model, so another non-RESET action requires a green full-history backtest. "
     "No action was taken; repair the model and retry this turn. Pure RESET queues "
     "remain available."
+)
+MODEL_VALIDATE_GATE_MESSAGE = (
+    "Validate-before-plan gate: multi-action commits require the installed world "
+    "model to pass a green full-history backtest at the current history. No action "
+    "was taken; repair the model (or commit a single action) and retry this turn. "
+    "Pure RESET queues remain available."
+)
+MODEL_REQUIRED_GATE_MESSAGE = (
+    "Validate-before-plan gate: no world model is installed, so commits are limited "
+    "to a single action. No action was taken; commit one probe action, or install a "
+    "world model and retry."
 )
 RESET_BOUNDARY_GATE_MESSAGE = (
     "Reset-boundary gate: while a world model is active, RESET must end the queue "
@@ -235,6 +247,7 @@ class LocusService:
         arcade: Any | None = None,
         process_timeout: float = 30,
         bfs_timeout: float = 600,
+        backtest_timeout: float = 120,
         clock: Callable[[], float] = time.time,
         debug_log: str | os.PathLike[str] | None = None,
         experimental_tooling: bool | None = None,
@@ -248,6 +261,7 @@ class LocusService:
         self.turn = turn
         self.process_timeout = process_timeout
         self.bfs_timeout = bfs_timeout
+        self.backtest_timeout = backtest_timeout
         self.debug_log = Path(debug_log) if debug_log else None
         if experimental_tooling is None:
             configured = os.environ.get("SCHEMA_EXPERIMENTAL_TOOLING", "false")
@@ -276,6 +290,7 @@ class LocusService:
             self.gateway = gateway
         self._committed = self.gateway.is_turn_complete(turn_id)
         self._full_history_read = False
+        self._backtest_cache: dict[tuple[str, int], str | None] = {}
         self.last_result: ExecutionResult | None = None
 
     def close(self) -> None:
@@ -636,6 +651,7 @@ class LocusService:
         queue = tuple(QueuedAction.parse(action) for action in actions)
         has_non_reset = any(action.action != 0 for action in queue)
         gate_messages: list[str] = []
+        repair_gate_appended = False
         if self.experimental_tooling:
             if queue and queue[0].action != 0 and not self._full_history_read:
                 try:
@@ -653,6 +669,7 @@ class LocusService:
                 repair_report = self._model_repair_report()
                 if repair_report is not None:
                     gate_messages.append(MODEL_REPAIR_GATE_MESSAGE + "\n" + repair_report)
+                    repair_gate_appended = True
             if self.gateway.live_model_path() is not None:
                 reset_seen = False
                 for action in queue:
@@ -660,6 +677,15 @@ class LocusService:
                     if reset_seen and action.action != 0:
                         gate_messages.append(RESET_BOUNDARY_GATE_MESSAGE)
                         break
+        if len(queue) > 1 and has_non_reset:
+            if self.gateway.live_model_path() is None:
+                gate_messages.append(MODEL_REQUIRED_GATE_MESSAGE)
+            elif not repair_gate_appended:
+                validation_report = self._validated_model_report()
+                if validation_report is not None:
+                    gate_messages.append(
+                        MODEL_VALIDATE_GATE_MESSAGE + "\n" + validation_report
+                    )
         if gate_messages:
             return self._finished(
                 call_id,
@@ -703,43 +729,78 @@ class LocusService:
             raise RuntimeError("no world model installed")
         return path
 
-    def _backtest_output(self, selector: Any) -> str:
+    def _backtest_output(
+        self,
+        selector: Any,
+        model_path: Path | None = None,
+    ) -> str:
         result = self._run_model_worker(
             "backtest",
-            self._model_path(),
+            self._model_path() if model_path is None else model_path,
             {"history": self._history_payload(), "selector": selector},
-            timeout=self.process_timeout,
+            timeout=self.backtest_timeout,
         )
         if not isinstance(result, str):
             raise RuntimeError("sandboxed backtest returned invalid output")
         return result
 
-    def _model_repair_report(self) -> str | None:
+    def _backtest_failure_report(self, exc: Exception) -> str:
+        if isinstance(exc, _ModelWorkerTimeout):
+            return (
+                "ERROR: required full-history backtest timed out after "
+                f"{_seconds_text(self.backtest_timeout)}s."
+            )
+        return (
+            "ERROR: required full-history backtest failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    def _full_history_backtest_report(
+        self,
+        model_path: Path,
+    ) -> tuple[str | None, bool]:
         try:
             with _tool_output_to_stderr():
                 for selector, label in (
                     ("all", "[all transitions]"),
                     (ALIGNMENT_BACKTEST_SELECTOR, "[full-history alignment]"),
                 ):
-                    output = self._backtest_output(selector)
+                    output = self._backtest_output(selector, model_path)
                     green = (
                         output.startswith(f"backtest {label}: ")
                         and "; 0 mismatch(es), " in output
                         and "Model predicts ALL checkable transitions" in output
                     )
                     if not green:
-                        return output
-        except _ModelWorkerTimeout:
-            return (
-                "ERROR: required full-history backtest timed out after "
-                f"{_seconds_text(self.process_timeout)}s."
-            )
+                        return output, True
         except Exception as exc:
-            return (
-                "ERROR: required full-history backtest failed: "
-                f"{type(exc).__name__}: {exc}"
-            )
-        return None
+            return self._backtest_failure_report(exc), False
+        return None, True
+
+    def _model_repair_report(self) -> str | None:
+        try:
+            model_path = self._model_path()
+        except Exception as exc:
+            return self._backtest_failure_report(exc)
+        report, _ = self._full_history_backtest_report(model_path)
+        return report
+
+    def _validated_model_report(self) -> str | None:
+        model_path = self.gateway.live_model_path()
+        if model_path is None:
+            raise RuntimeError("no world model installed")
+        try:
+            model_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        except Exception as exc:
+            return self._backtest_failure_report(exc)
+        key = (model_hash, len(self.gateway.timeline))
+        if key in self._backtest_cache:
+            return self._backtest_cache[key]
+
+        report, definitive = self._full_history_backtest_report(model_path)
+        if definitive:
+            self._backtest_cache[key] = report
+        return report
 
     def _model_session(
         self,
@@ -828,6 +889,9 @@ class LocusService:
 
         def operation() -> str:
             model_path = self._model_path()
+            validation_report = self._validated_model_report()
+            if validation_report is not None:
+                return MODEL_VALIDATE_GATE_MESSAGE + "\n" + validation_report
             goals = {
                 "advance": ("level_up", "win"),
                 "level_up": ("level_up",),
@@ -1367,6 +1431,7 @@ def _service() -> LocusService:
             events_path=os.environ.get("LOCUS_EVENTS"),
             process_timeout=float(os.environ.get("LOCUS_PROCESS_TIMEOUT", "30")),
             bfs_timeout=float(os.environ.get("LOCUS_BFS_TIMEOUT", "600")),
+            backtest_timeout=float(os.environ.get("LOCUS_BACKTEST_TIMEOUT", "120")),
             debug_log=os.environ.get("LOCUS_LOG"),
         )
     return _SERVICE
@@ -1514,6 +1579,8 @@ __all__ = [
     "CROSS_TRANSITION_GATE_MESSAGE",
     "LOCK_MESSAGE",
     "MODEL_REPAIR_GATE_MESSAGE",
+    "MODEL_REQUIRED_GATE_MESSAGE",
+    "MODEL_VALIDATE_GATE_MESSAGE",
     "RESET_BOUNDARY_GATE_MESSAGE",
     "LocusService",
     "commit_actions",
