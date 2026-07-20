@@ -322,6 +322,44 @@ def test_core_multi_action_commit_requires_green_model(monkeypatch, tmp_path):
         assert retry != LOCK_MESSAGE
 
 
+def test_core_multi_action_commit_rejects_model_with_crashing_ingest(tmp_path):
+    with _service(tmp_path, experimental_tooling=False) as service:
+        assert service.commit_actions([{"action": 3}], "seed history") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    source = (
+        "def init_state(entry_grid):\n"
+        "    return entry_grid[0][0]\n\n"
+        "def predict(state, grid, action, x=None, y=None):\n"
+        "    predicted = [[value + 1 for value in row] for row in grid]\n"
+        "    return predicted, {}, state + 1\n\n"
+        "def ingest(state, actual_grid):\n"
+        "    raise RuntimeError('ingest alignment crash')\n"
+    )
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+        experimental_tooling=False,
+    ) as service:
+        service.write_file("world_model_v1.py", source)
+        output = service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "reject ingest crash",
+        )
+
+        assert output.startswith(locus.MODEL_VALIDATE_GATE_MESSAGE + "\n")
+        assert "backtest [full-history alignment]: 0/1" in output
+        assert "; 1 mismatch(es)," in output
+        assert "#0:ingest" in output
+        assert service._committed is False
+        assert service.last_result is None
+        assert len(service.gateway.timeline) == 1
+
+
 def test_core_multi_action_commit_with_green_model_executes(monkeypatch, tmp_path):
     def green_worker(operation, _model_path, payload=None, *, timeout):
         assert operation == "backtest"
