@@ -12,6 +12,7 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+import schema_harness.locus as locus
 from schema_harness.locus import (
     COMMIT_MESSAGE,
     CROSS_TRANSITION_GATE_MESSAGE,
@@ -170,6 +171,62 @@ def test_run_bfs_wall_clock_timeout_string(tmp_path):
         assert service.run_bfs("advance", [], max_depth=1) == (
             "ERROR: run_bfs timed out after 0.01s."
         )
+
+
+def test_locus_service_default_bfs_timeout_is_600(tmp_path):
+    with _service(tmp_path) as service:
+        assert service.bfs_timeout == 600
+
+
+def test_locus_factory_env_default_bfs_timeout_is_600(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCUS_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("LOCUS_GAME", "jail-test")
+    monkeypatch.setenv("LOCUS_TURN_ID", "turn-1")
+    monkeypatch.delenv("LOCUS_BFS_TIMEOUT", raising=False)
+
+    def fake_service(*_args, **kwargs):
+        return SimpleNamespace(bfs_timeout=kwargs["bfs_timeout"])
+
+    monkeypatch.setattr(locus, "LocusService", fake_service)
+    monkeypatch.setattr(locus, "_SERVICE", None)
+    assert locus._service().bfs_timeout == 600
+
+    monkeypatch.setattr(locus, "_SERVICE", None)
+    monkeypatch.setenv("LOCUS_BFS_TIMEOUT", "45")
+    assert locus._service().bfs_timeout == 45.0
+
+
+def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
+    source = (
+        "def step(grid, action, x=None, y=None):\n"
+        "    return grid, {}\n\n"
+        "def is_goal(state):\n"
+        "    return False\n"
+    )
+    captured = []
+
+    def capture_worker(operation, _model_path, payload=None, *, timeout):
+        if operation == "probe":
+            return {
+                "kind": "stateless",
+                "entrypoint": "step",
+                "has_is_goal": True,
+            }
+        assert payload is not None
+        captured.append((payload["max_nodes"], timeout))
+        return {"output": "captured"}
+
+    with _service(tmp_path) as service:
+        monkeypatch.setattr(service, "_run_model_worker", capture_worker)
+        service.write_file("world_model_v1.py", source)
+
+        assert service.run_bfs("advance", [], max_depth=1) == "captured"
+        assert captured[-1] == (1_000_000, service.bfs_timeout)
+
+        assert service.run_bfs(
+            "advance", [], max_depth=1, max_nodes=500
+        ) == "captured"
+        assert captured[-1] == (500, service.bfs_timeout)
 
 
 def test_process_tools_apply_os_sandbox_and_keep_normal_workdir_use(tmp_path):
