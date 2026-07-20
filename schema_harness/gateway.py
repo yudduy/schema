@@ -749,6 +749,51 @@ class PersistentGateway:
         record = self._ledger["turns"].get(turn_id)
         return isinstance(record, dict) and record.get("phase") == "COMPLETE"
 
+    def _latest_completed_transition_turn(self) -> dict[str, Any] | None:
+        timeline_end = len(self.gateway.timeline)
+        candidates: list[tuple[int, int, dict[str, Any]]] = []
+        for order, record in enumerate(self._ledger["turns"].values()):
+            if not isinstance(record, dict) or record.get("phase") != "COMPLETE":
+                continue
+            start = record.get("pre_step_index")
+            end = record.get("post_step_index")
+            turn = record.get("turn")
+            if (
+                type(start) is int
+                and type(end) is int
+                and 0 <= start < end == timeline_end
+            ):
+                candidates.append((turn if type(turn) is int else -1, order, record))
+        return max(candidates, key=lambda item: item[:2])[2] if candidates else None
+
+    def latest_completed_turn_start(self) -> int | None:
+        """Return the timeline index before the latest turn that added transitions."""
+
+        record = self._latest_completed_transition_turn()
+        return int(record["pre_step_index"]) if record is not None else None
+
+    def latest_completed_turn_needs_model_repair(self) -> bool:
+        """Return whether the latest action-producing turn had a non-RESET surprise."""
+
+        record = self._latest_completed_transition_turn()
+        if record is None:
+            return False
+        result = record.get("result")
+        if not isinstance(result, Mapping) or result.get("halt_reason") != "surprise":
+            return False
+        actions = record.get("actions")
+        executed = result.get("executed")
+        if not isinstance(actions, list) or type(executed) is not int:
+            return False
+        if not 1 <= executed <= len(actions):
+            return False
+        surprised = actions[executed - 1]
+        return (
+            isinstance(surprised, list)
+            and bool(surprised)
+            and surprised[0] != 0
+        )
+
     def _after_commit_durable(self, turn_id: str) -> None:
         """Fault-injection seam: COMMIT_DURABLE is fsynced before this hook runs."""
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import pickle
-from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from types import ModuleType
@@ -153,53 +152,58 @@ def run_bfs(
     base_candidates = discrete + clicks
     reset = QueuedAction(0)
     root = _Node(copy.deepcopy(start_state), copy.deepcopy(start_grid), [])
-    queue = deque([root])
+    frontier = [root]
     seen = {_node_key(root.grid, root.state)}
     expanded = 0
 
-    while queue and expanded < max_nodes:
-        node = queue.popleft()
-        depth = len(node.plan)
-        if depth >= max_depth:
-            continue
+    for depth in range(max_depth):
+        if not frontier or expanded >= max_nodes:
+            break
         candidates = base_candidates + ((reset,) if depth == 0 else ())
+        next_frontier: list[_Node] = []
+        # Candidate-major traversal preserves caller priority while giving multiple
+        # parents a prediction before a lower-priority candidate consumes the budget.
         for action in candidates:
+            for node in frontier:
+                if expanded >= max_nodes:
+                    break
+                expanded += 1
+                branch_state = copy.deepcopy(node.state)
+                branch_grid = copy.deepcopy(node.grid)
+                predicted_grid, flags, next_state = call_predict(
+                    model,
+                    branch_state,
+                    branch_grid,
+                    action.action,
+                    action.x,
+                    action.y,
+                )
+                plan = [*node.plan, _plan_action(action)]
+                key = _node_key(predicted_grid, next_state)
+                is_new = key not in seen
+                if is_new:
+                    seen.add(key)
+
+                reached = _goal_hit(flags, goals)
+                if reached is not None:
+                    return BfsReport(
+                        found=True,
+                        goal=reached,
+                        plan=plan,
+                        expanded=expanded,
+                        distinct_states=len(seen),
+                        actions=tuple(action.action for action in discrete),
+                        click_count=len(clicks),
+                        flags=flags,
+                        max_depth=max_depth,
+                        max_nodes=max_nodes,
+                    )
+                if any(flags.values()) or not is_new:
+                    continue
+                next_frontier.append(_Node(next_state, predicted_grid, plan))
             if expanded >= max_nodes:
                 break
-            expanded += 1
-            branch_state = copy.deepcopy(node.state)
-            branch_grid = copy.deepcopy(node.grid)
-            predicted_grid, flags, next_state = call_predict(
-                model,
-                branch_state,
-                branch_grid,
-                action.action,
-                action.x,
-                action.y,
-            )
-            plan = [*node.plan, _plan_action(action)]
-            key = _node_key(predicted_grid, next_state)
-            is_new = key not in seen
-            if is_new:
-                seen.add(key)
-
-            reached = _goal_hit(flags, goals)
-            if reached is not None:
-                return BfsReport(
-                    found=True,
-                    goal=reached,
-                    plan=plan,
-                    expanded=expanded,
-                    distinct_states=len(seen),
-                    actions=tuple(action.action for action in discrete),
-                    click_count=len(clicks),
-                    flags=flags,
-                    max_depth=max_depth,
-                    max_nodes=max_nodes,
-                )
-            if any(flags.values()) or not is_new:
-                continue
-            queue.append(_Node(next_state, predicted_grid, plan))
+        frontier = next_frontier
 
     return BfsReport(
         found=False,

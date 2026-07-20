@@ -32,6 +32,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "schema_harness"
 
+from .backtest import ALIGNMENT_BACKTEST_SELECTOR
 from .events import EventLog, ToolFinished, ToolStarted, TurnCommitted
 from .guard import sandbox_exec_argv, shell_command_safe, wrap_python
 from .gateway import (
@@ -41,12 +42,20 @@ from .gateway import (
     Transition,
     WorldModelPrediction,
 )
-from .inspectors import describe_grid_diff, discover_click_targets
+from .inspectors import (
+    describe_actor_affordances,
+    describe_grid_diff,
+    discover_click_targets,
+    pending_actor_affordance_hint,
+)
 from .model_loader import ModelInterface
 
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[1])
 _PACKAGE_ROOT = Path(__file__).resolve().parent
+_REPO_OUTPUT_PATTERN = re.compile(
+    re.escape(_REPO_ROOT) + r"(?![A-Za-z0-9._-])"
+)
 _HARNESS_MANAGED_FILES = frozenset(
     {"events.jsonl", "mcp.json", "method_prompt.md", "run.json"}
 )
@@ -63,6 +72,22 @@ _HARNESS_PRIVATE_RUNTIME_FILES = frozenset(
 )
 LOCK_MESSAGE = "Already committed this turn — end your turn now."
 COMMIT_MESSAGE = "Committed {count} action(s). Stop now — end your turn, do not call more tools."
+CROSS_TRANSITION_GATE_MESSAGE = (
+    "Cross-transition gate: a newly supported structural context is available. "
+    'Call read_history(detail="full") before committing; no action was taken, and '
+    "you may retry this turn."
+)
+MODEL_REPAIR_GATE_MESSAGE = (
+    "Model-repair gate: the latest non-RESET transition surprised the live world "
+    "model, so another non-RESET action requires a green full-history backtest. "
+    "No action was taken; repair the model and retry this turn. Pure RESET queues "
+    "remain available."
+)
+RESET_BOUNDARY_GATE_MESSAGE = (
+    "Reset-boundary gate: while a world model is active, RESET must end the queue "
+    "because full-history alignment reinitializes model state at RESET. No action "
+    "was taken; commit RESET separately, then retry real actions next turn."
+)
 _MODEL_PATTERN = re.compile(r"world_model_v\d+\.py")
 _T = TypeVar("_T")
 _STDOUT_REDIRECT_LOCK = threading.RLock()
@@ -212,6 +237,7 @@ class LocusService:
         bfs_timeout: float = 30,
         clock: Callable[[], float] = time.time,
         debug_log: str | os.PathLike[str] | None = None,
+        experimental_tooling: bool | None = None,
     ) -> None:
         self.workdir = Path(workdir).resolve()
         if Path(_REPO_ROOT).is_relative_to(self.workdir):
@@ -223,6 +249,14 @@ class LocusService:
         self.process_timeout = process_timeout
         self.bfs_timeout = bfs_timeout
         self.debug_log = Path(debug_log) if debug_log else None
+        if experimental_tooling is None:
+            configured = os.environ.get("SCHEMA_EXPERIMENTAL_TOOLING", "false")
+            if configured not in {"true", "false"}:
+                raise ValueError(
+                    "SCHEMA_EXPERIMENTAL_TOOLING must be exactly 'true' or 'false'"
+                )
+            experimental_tooling = configured == "true"
+        self.experimental_tooling = experimental_tooling
         self._owns_event_log = event_log is None and events_path is not None
         self.event_log = event_log
         if self.event_log is None and events_path is not None:
@@ -241,6 +275,7 @@ class LocusService:
         else:
             self.gateway = gateway
         self._committed = self.gateway.is_turn_complete(turn_id)
+        self._full_history_read = False
         self.last_result: ExecutionResult | None = None
 
     def close(self) -> None:
@@ -599,6 +634,40 @@ class LocusService:
                 rejected=True,
             )
         queue = tuple(QueuedAction.parse(action) for action in actions)
+        has_non_reset = any(action.action != 0 for action in queue)
+        gate_messages: list[str] = []
+        if self.experimental_tooling:
+            if queue and queue[0].action != 0 and not self._full_history_read:
+                try:
+                    new_topology = self._new_affordance_topology()
+                except Exception:
+                    # Inspector failure must never make real actions impossible.
+                    new_topology = None
+                if new_topology is not None:
+                    gate_messages.append(CROSS_TRANSITION_GATE_MESSAGE)
+            needs_model_repair = (
+                has_non_reset
+                and self.gateway.latest_completed_turn_needs_model_repair()
+            )
+            if needs_model_repair:
+                repair_report = self._model_repair_report()
+                if repair_report is not None:
+                    gate_messages.append(MODEL_REPAIR_GATE_MESSAGE + "\n" + repair_report)
+            if self.gateway.live_model_path() is not None:
+                reset_seen = False
+                for action in queue:
+                    reset_seen = reset_seen or action.action == 0
+                    if reset_seen and action.action != 0:
+                        gate_messages.append(RESET_BOUNDARY_GATE_MESSAGE)
+                        break
+        if gate_messages:
+            return self._finished(
+                call_id,
+                "commit_actions",
+                args,
+                "\n".join(gate_messages),
+                rejected=True,
+            )
         output = COMMIT_MESSAGE.format(count=len(queue))
         self._committed = True
         # Match the released ordering: the tool call finishes before the durable
@@ -633,6 +702,44 @@ class LocusService:
         if path is None:
             raise RuntimeError("no world model installed")
         return path
+
+    def _backtest_output(self, selector: Any) -> str:
+        result = self._run_model_worker(
+            "backtest",
+            self._model_path(),
+            {"history": self._history_payload(), "selector": selector},
+            timeout=self.process_timeout,
+        )
+        if not isinstance(result, str):
+            raise RuntimeError("sandboxed backtest returned invalid output")
+        return result
+
+    def _model_repair_report(self) -> str | None:
+        try:
+            with _tool_output_to_stderr():
+                for selector, label in (
+                    ("all", "[all transitions]"),
+                    (ALIGNMENT_BACKTEST_SELECTOR, "[full-history alignment]"),
+                ):
+                    output = self._backtest_output(selector)
+                    green = (
+                        output.startswith(f"backtest {label}: ")
+                        and "; 0 mismatch(es), " in output
+                        and "Model predicts ALL checkable transitions" in output
+                    )
+                    if not green:
+                        return output
+        except _ModelWorkerTimeout:
+            return (
+                "ERROR: required full-history backtest timed out after "
+                f"{_seconds_text(self.process_timeout)}s."
+            )
+        except Exception as exc:
+            return (
+                "ERROR: required full-history backtest failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        return None
 
     def _model_session(
         self,
@@ -678,7 +785,6 @@ class LocusService:
         }.items() if value is not None}
 
         def operation() -> str:
-            model_path = self._model_path()
             timeline = self.gateway.timeline
             selector: Any = "all"
             if indices is not None:
@@ -694,14 +800,7 @@ class LocusService:
                 )
             if max_details is not None and (type(max_details) is not int or max_details < 0):
                 raise ValueError("max_details must be a non-negative integer")
-            output = self._run_model_worker(
-                "backtest",
-                model_path,
-                {"history": self._history_payload(), "selector": selector},
-                timeout=self.process_timeout,
-            )
-            if not isinstance(output, str):
-                raise RuntimeError("sandboxed backtest returned invalid output")
+            output = self._backtest_output(selector)
             artifact = self.workdir / "runtime" / "artifact"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text(output + "\n", encoding="utf-8", newline="")
@@ -772,6 +871,41 @@ class LocusService:
 
         return str(self._invoke("run_bfs", args, operation))
 
+    def _affordance_context(
+        self,
+    ) -> tuple[list[list[int]], list[tuple[int, list[list[int]]]], int]:
+        timeline = self.gateway.timeline
+        level_initial = self.gateway.gateway.initial_grid
+        level_start = 0
+        for position, item in enumerate(timeline):
+            if item.action == 0 or item.level_up:
+                level_initial = item.grid
+                level_start = position + 1
+        observations = [(item.action, item.grid) for item in timeline[level_start:]]
+        return level_initial, observations, level_start
+
+    def _affordance_advisory(self) -> str | None:
+        level_initial, observations, _ = self._affordance_context()
+        topology = describe_actor_affordances(level_initial, observations)
+        if topology is not None:
+            return topology
+        return pending_actor_affordance_hint(level_initial, observations)
+
+    def _new_affordance_topology(self) -> str | None:
+        level_initial, observations, level_start = self._affordance_context()
+        turn_start = self.gateway.latest_completed_turn_start()
+        if not observations or turn_start is None:
+            return None
+        topology = describe_actor_affordances(level_initial, observations)
+        if topology is None:
+            return None
+        prior_length = max(0, turn_start - level_start)
+        prior = describe_actor_affordances(
+            level_initial,
+            observations[:prior_length],
+        )
+        return topology if prior is None else None
+
     def read_history(
         self,
         indices: list[int] | None = None,
@@ -839,6 +973,8 @@ class LocusService:
                     f"level_up={item.level_up} dead={item.dead} win={item.win}"
                 )
             result = summary + "; detail=full: " + (" | ".join(details) or "(none)")
+            if not self.experimental_tooling:
+                return result
             inspected = selected[-8:]
             inspector_records: list[str] = []
             for item in inspected:
@@ -851,6 +987,17 @@ class LocusService:
             )
             if inspector_records:
                 appendix += "\n" + "\n".join(inspector_records)
+            affordance_advisory = self._affordance_advisory()
+            if affordance_advisory is not None:
+                appendix += "\n" + affordance_advisory
+            if timeline and self.gateway.live_model_path() is None:
+                unit = "transition" if len(timeline) == 1 else "transitions"
+                appendix += (
+                    f"\nModel gate: NONE after {len(timeline)} {unit}. Write a minimal "
+                    "world_model_v1.py now and run run_backtest; without an installed model, "
+                    "commit_actions can execute only one probe. Model unknown actions "
+                    "conservatively instead of waiting to solve every control."
+                )
             if 6 in self.gateway.gateway.legal_actions:
                 targets = discover_click_targets(self.gateway.gateway.grid)
                 appendix += (
@@ -861,7 +1008,10 @@ class LocusService:
                 )
             return result + "\n" + appendix
 
-        return str(self._invoke("read_history", args, operation))
+        output = self._invoke("read_history", args, operation)
+        if detail == "full" and output != LOCK_MESSAGE:
+            self._full_history_read = True
+        return str(output)
 
     def _run_process(
         self,
@@ -871,6 +1021,9 @@ class LocusService:
         timeout: float,
         environment: Mapping[str, str] | None = None,
     ) -> str:
+        def redact(text: str) -> str:
+            return _REPO_OUTPUT_PATTERN.sub("<harness-repo>", text)
+
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -891,12 +1044,15 @@ class LocusService:
                 partial += exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
             return (
                 f"ERROR: timed out after {_seconds_text(timeout)}s — process killed. "
-                f"Partial output below.\n{partial}"
+                f"Partial output below.\n{redact(partial)}"
             )
         elapsed = time.monotonic() - started
-        output = f"$ {display}\nexit={completed.returncode} in {elapsed:.2f}s\n--- stdout ---\n{completed.stdout}"
+        output = (
+            f"$ {display}\nexit={completed.returncode} in {elapsed:.2f}s"
+            f"\n--- stdout ---\n{redact(completed.stdout)}"
+        )
         if completed.stderr:
-            output += f"\n--- stderr ---\n{completed.stderr}"
+            output += f"\n--- stderr ---\n{redact(completed.stderr)}"
         return output
 
     def _subprocess_environment(self) -> dict[str, str]:
@@ -904,10 +1060,17 @@ class LocusService:
 
         process_tmp = self.workdir / ".agent_scratch" / "process_tmp"
         matplotlib = self.workdir / ".agent_scratch" / "matplotlib"
+        process_home = self.workdir / ".agent_scratch" / "home"
         process_tmp.mkdir(parents=True, exist_ok=True)
         matplotlib.mkdir(parents=True, exist_ok=True)
+        if not process_home.resolve(strict=False).is_relative_to(self.workdir):
+            raise RuntimeError("agent process HOME escapes workdir")
+        process_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if process_home.is_symlink():
+            raise RuntimeError("agent process HOME must not be a symlink")
+        process_home.chmod(0o700)
         return {
-            "HOME": str(Path.home()),
+            "HOME": str(process_home),
             "PATH": "/usr/bin:/bin",
             "TMPDIR": str(process_tmp),
             "LANG": "C",
@@ -1348,7 +1511,10 @@ if __name__ == "__main__":
 
 __all__ = [
     "COMMIT_MESSAGE",
+    "CROSS_TRANSITION_GATE_MESSAGE",
     "LOCK_MESSAGE",
+    "MODEL_REPAIR_GATE_MESSAGE",
+    "RESET_BOUNDARY_GATE_MESSAGE",
     "LocusService",
     "commit_actions",
     "cp",

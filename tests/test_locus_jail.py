@@ -12,7 +12,22 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from schema_harness.locus import LOCK_MESSAGE, LocusService, mcp
+from schema_harness.locus import (
+    COMMIT_MESSAGE,
+    CROSS_TRANSITION_GATE_MESSAGE,
+    LOCK_MESSAGE,
+    LocusService,
+    MODEL_REPAIR_GATE_MESSAGE,
+    RESET_BOUNDARY_GATE_MESSAGE,
+    mcp,
+)
+
+
+@pytest.fixture(autouse=True)
+def _enable_legacy_experimental_tooling(monkeypatch):
+    """Keep existing intervention tests explicit while production defaults to core."""
+
+    monkeypatch.setenv("SCHEMA_EXPERIMENTAL_TOOLING", "true")
 
 
 class FakeEnvironment:
@@ -58,6 +73,15 @@ def _service(tmp_path: Path, **kwargs) -> LocusService:
         arcade=FakeArcade(),
         **kwargs,
     )
+
+
+def _seed_non_reset_model_surprise(tmp_path: Path) -> None:
+    source = "def step(grid, action, x=None, y=None):\n    return grid, {}\n"
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        service.commit_actions([{"action": 3}], "seed surprise")
+        assert service.last_result is not None
+        assert service.last_result.halt_reason == "surprise"
 
 
 def test_exact_fourteen_tool_names_and_fixed_signatures():
@@ -174,6 +198,29 @@ def test_process_tools_apply_os_sandbox_and_keep_normal_workdir_use(tmp_path):
         )
         assert "exit=0" not in ctypes_output
         assert "sandbox-secret" not in ctypes_output
+
+        metadata_output = service.run_python(
+            "from pathlib import Path; "
+            f"print([p.name for p in Path({str(tmp_path.parent)!r}).iterdir()])"
+        )
+        assert outside.name not in metadata_output
+
+
+def test_process_tools_redact_harness_path_and_use_private_home(tmp_path):
+    repo = str(Path(__file__).resolve().parents[1])
+    sibling = repo + "0"
+    with _service(tmp_path) as service:
+        output = service.run_python(
+            "from pathlib import Path; "
+            f"print({repo!r}); print({sibling!r}); print(Path.home())"
+        )
+
+    assert "<harness-repo>" in output
+    assert sibling in output
+    assert "<harness-repo>0" not in output
+    assert f"\n{Path.home()}\n" not in output
+    assert str(tmp_path / ".agent_scratch" / "home") in output
+    assert (tmp_path / ".agent_scratch" / "home").stat().st_mode & 0o777 == 0o700
 
 
 def test_harness_state_is_readable_but_immutable_to_agent_tools(tmp_path):
@@ -448,9 +495,475 @@ def test_read_history_keeps_original_prefix_and_appends_grid_inspector(tmp_path)
         "  4@[r0..1,c0..1] from={0:4} to={1:4}\n"
         "    patch before=[[0,0],[0,0]] after=[[1,1],[1,1]]\n"
         "value_pairs={0->1:4}\n"
+        "Model gate: NONE after 1 transition. Write a minimal world_model_v1.py "
+        "now and run run_backtest; without an installed model, commit_actions can "
+        "execute only one probe. Model unknown actions conservatively instead of "
+        "waiting to solve every control.\n"
         "Current-grid click target proposals (1; component-based, unverified; "
         "pass selected coordinates as run_bfs clicks): [[0,0]]"
     )
+
+
+def test_read_history_omits_model_gate_once_a_model_is_installed(tmp_path):
+    source = "def step(grid, action, x=None, y=None):\n    return grid, {}\n"
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history()
+
+    assert "Model gate:" not in output
+
+
+def test_read_history_appends_pending_cross_transition_hint(monkeypatch, tmp_path):
+    hint = "Cross-transition inspector: pending paired movement."
+    monkeypatch.setattr(
+        "schema_harness.locus.pending_actor_affordance_hint",
+        lambda _initial, _observations: hint,
+    )
+    with _service(tmp_path) as service:
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history()
+
+    assert hint in output
+
+
+def test_read_history_summary_remains_appendix_free(tmp_path):
+    with _service(tmp_path) as service:
+        service.commit_actions([{"action": 3}], "seed history")
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.read_history(detail="summary")
+
+    assert output == (
+        "1 transitions total. Summary: level_ups=0 deaths=0 wins=0 "
+        "resets(action0)=0 clicks(action6)=0; by-action={3: 1}; "
+        "max_level=0; showing indices [0, 0] -> 1 steps."
+    )
+
+
+def test_faithful_core_omits_history_appendix_and_commit_gates(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path, experimental_tooling=False) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        arcade=FakeArcade(),
+        experimental_tooling=False,
+    ) as service:
+        output = service.read_history(detail="full")
+
+    assert "Inspector:" not in output
+    assert "Model gate:" not in output
+    assert "click target proposals" not in output
+    assert "Cross-transition" not in output
+
+
+def test_cross_transition_gate_is_transactional_and_full_history_unlocks(
+    monkeypatch,
+    tmp_path,
+):
+    events = tmp_path / "events.jsonl"
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path, events_path=events) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        assert service._committed is False
+        assert service.last_result is None
+        assert service.gateway.timeline == ()
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert [record["kind"] for record in records] == [
+            "tool_started",
+            "tool_finished",
+        ]
+        assert records[-1]["output"] == CROSS_TRANSITION_GATE_MESSAGE
+        assert records[-1]["is_error"] is False
+
+        service.read_history(detail="summary")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        with pytest.raises(ValueError, match="detail must be"):
+            service.read_history(detail="bad")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert not any(
+            record["kind"] in {"turn_committed", "action_taken"}
+            for record in records
+        )
+
+        service.read_history(detail="full")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+        assert service.last_result is not None
+        assert service.last_result.executed == 1
+        assert service.commit_actions([{"action": 3}], "again") == LOCK_MESSAGE
+
+    records = [json.loads(line) for line in events.read_text().splitlines()]
+    assert sum(record["kind"] == "turn_committed" for record in records) == 1
+    assert sum(record["kind"] == "action_taken" for record in records) == 1
+
+
+@pytest.mark.parametrize(
+    ("actions", "count"),
+    [([], 0), ([{"action": 0}, {"action": 3}], 2)],
+)
+def test_cross_transition_gate_exempts_empty_and_reset_first_queues(
+    monkeypatch,
+    tmp_path,
+    actions,
+    count,
+):
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with _service(tmp_path) as service:
+        assert service.commit_actions(actions, "reset or stop") == (
+            COMMIT_MESSAGE.format(count=count)
+        )
+
+
+def test_cross_transition_gate_fails_open_on_inspector_error(monkeypatch, tmp_path):
+    def fail(_service):
+        raise RuntimeError("inspector failed")
+
+    monkeypatch.setattr(LocusService, "_new_affordance_topology", fail)
+    with _service(tmp_path) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
+def test_cross_transition_gate_covers_mid_batch_activation_only_once(
+    monkeypatch,
+    tmp_path,
+):
+    source = (
+        "def step(grid, action, x=None, y=None):\n"
+        "    return [[value + 1 for value in row] for row in grid], {}\n"
+    )
+    monkeypatch.setattr(
+        "schema_harness.locus.describe_actor_affordances",
+        lambda _initial, frames: "topology" if len(frames) >= 2 else None,
+    )
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}, {"action": 3}],
+            "seed one batch",
+        ) == COMMIT_MESSAGE.format(count=3)
+        assert service.last_result is not None
+        assert service.last_result.executed == 3
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([], "defer") == COMMIT_MESSAGE.format(count=0)
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-3",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            CROSS_TRANSITION_GATE_MESSAGE
+        )
+        service.read_history(detail="full")
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-4",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "already delivered") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
+def test_model_repair_gate_is_transactional_and_auto_certifies_repair(tmp_path):
+    _seed_non_reset_model_surprise(tmp_path)
+    events = tmp_path / "events.jsonl"
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        turn=2,
+        events_path=events,
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.commit_actions([{"action": 3}], "stale probe")
+        assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+        assert "backtest [all transitions]: 0/1 transitions fully correct" in output
+        assert "; 1 mismatch(es)," in output
+        assert service._committed is False
+        assert service.last_result is None
+        assert len(service.gateway.timeline) == 1
+        records = [json.loads(line) for line in events.read_text().splitlines()]
+        assert [record["kind"] for record in records] == [
+            "tool_started",
+            "tool_finished",
+        ]
+        assert records[-1]["output"] == output
+        assert records[-1]["is_error"] is False
+
+        repaired = (
+            "def step(grid, action, x=None, y=None):\n"
+            "    return [[value + 1 for value in row] for row in grid], {}\n"
+        )
+        service.write_file("world_model_v2.py", repaired)
+        assert service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "repaired plan",
+        ) == COMMIT_MESSAGE.format(count=2)
+        assert service.last_result is not None
+        assert service.last_result.executed == 2
+
+    records = [json.loads(line) for line in events.read_text().splitlines()]
+    assert sum(record["kind"] == "turn_committed" for record in records) == 1
+    assert sum(record["kind"] == "action_taken" for record in records) == 2
+
+
+def test_model_repair_gate_checks_fresh_worker_history_alignment(tmp_path):
+    surprising = (
+        "def init_state(entry_grid):\n"
+        "    return {'calls': 0}\n\n"
+        "def predict(state, grid, action, x=None, y=None):\n"
+        "    calls = state['calls']\n"
+        "    predicted = (\n"
+        "        [[value + 1 for value in row] for row in grid]\n"
+        "        if calls == 0 else grid\n"
+        "    )\n"
+        "    return predicted, {}, {'calls': calls + 1}\n"
+    )
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", surprising)
+        service.commit_actions(
+            [{"action": 3}, {"action": 3}],
+            "second action surprises",
+        )
+        assert service.last_result is not None
+        assert service.last_result.executed == 2
+        assert service.last_result.halt_reason == "surprise"
+
+    repaired_open_loop = (
+        "def init_state(entry_grid):\n"
+        "    return {'seen': entry_grid[0][0]}\n\n"
+        "def predict(state, grid, action, x=None, y=None):\n"
+        "    seen = state['seen'] + 1\n"
+        "    predicted = [[seen for _ in row] for row in grid]\n"
+        "    return predicted, {}, {'seen': seen}\n\n"
+        "def ingest(state, actual_grid):\n"
+        "    return {'seen': 0}\n"
+    )
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        service.write_file("world_model_v2.py", repaired_open_loop)
+        assert "2/2 transitions fully correct" in service.run_backtest()
+        service.read_history(detail="full")
+        output = service.commit_actions([{"action": 3}], "retry")
+
+    assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+    assert "backtest [full-history alignment]: 1/2" in output
+    assert "#1:grid" in output
+
+
+def test_commit_combines_topology_and_model_repair_gates(monkeypatch, tmp_path):
+    _seed_non_reset_model_surprise(tmp_path)
+    monkeypatch.setattr(
+        LocusService,
+        "_new_affordance_topology",
+        lambda _service: "new topology",
+    )
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.commit_actions([{"action": 3}], "stale probe")
+
+    assert output.startswith(
+        CROSS_TRANSITION_GATE_MESSAGE + "\n" + MODEL_REPAIR_GATE_MESSAGE + "\n"
+    )
+    assert "backtest [all transitions]: 0/1 transitions fully correct" in output
+
+
+def test_model_repair_gate_empty_defers_and_mixed_reset_does_not_bypass(tmp_path):
+    _seed_non_reset_model_surprise(tmp_path)
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([], "defer") == COMMIT_MESSAGE.format(count=0)
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-3",
+        arcade=FakeArcade(),
+    ) as service:
+        output = service.commit_actions(
+            [{"action": 0}, {"action": 3}],
+            "mixed reset queue",
+        )
+        assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+        assert RESET_BOUNDARY_GATE_MESSAGE in output
+        assert len(service.gateway.timeline) == 1
+        assert service.commit_actions([{"action": 0}], "pure reset") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-4",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "after reset") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
+def test_live_model_requires_reset_to_end_queue_before_real_actions(tmp_path):
+    source = (
+        "def init_state(entry_grid):\n"
+        "    return {'poisoned': False}\n\n"
+        "def predict(state, grid, action, x=None, y=None):\n"
+        "    predicted = (\n"
+        "        grid if state['poisoned'] else "
+        "[[value + 1 for value in row] for row in grid]\n"
+        "    )\n"
+        "    return predicted, {}, {'poisoned': action == 0}\n"
+    )
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        output = service.commit_actions(
+            [{"action": 0}, {"action": 3}],
+            "reset then retry",
+        )
+        assert output == RESET_BOUNDARY_GATE_MESSAGE
+        assert service._committed is False
+        assert service.last_result is None
+        assert len(service.gateway.timeline) == 0
+        assert service.commit_actions([{"action": 0}], "reset only") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "retry after reset") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+        assert service.last_result is not None
+        assert service.last_result.halt_reason == "completed"
+
+
+def test_model_repair_gate_ignores_reset_caused_surprise(tmp_path):
+    source = (
+        "def step(grid, action, x=None, y=None):\n"
+        "    if action == 0:\n"
+        "        return grid, {}\n"
+        "    return [[value + 1 for value in row] for row in grid], {}\n"
+    )
+    with _service(tmp_path) as service:
+        service.write_file("world_model_v1.py", source)
+        service.commit_actions(
+            [{"action": 3}, {"action": 0}],
+            "second action is a surprising reset",
+        )
+        assert service.last_result is not None
+        assert service.last_result.executed == 2
+        assert service.last_result.halt_reason == "surprise"
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        assert service.commit_actions([{"action": 3}], "probe") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+
+def test_model_repair_gate_uses_the_action_that_surprised_in_a_batch(tmp_path):
+    _seed_non_reset_model_surprise(tmp_path)
+    ledger_path = tmp_path / "runtime" / "turn_ledger.json"
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["turns"]["turn-1"]["actions"] = [[0], [3]]
+    ledger["turns"]["turn-1"]["result"]["executed"] = 2
+    ledger_path.write_text(json.dumps(ledger) + "\n", encoding="utf-8")
+
+    with LocusService(
+        tmp_path,
+        "jail-test",
+        "turn-2",
+        arcade=FakeArcade(),
+    ) as service:
+        service.read_history(detail="full")
+        output = service.commit_actions([{"action": 3}], "retry")
+
+    assert output.startswith(MODEL_REPAIR_GATE_MESSAGE + "\n")
+    assert "backtest [all transitions]: 0/1 transitions fully correct" in output
+    assert "#0:grid" in output
 
 
 def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
@@ -487,3 +1000,67 @@ def test_stdio_wire_is_not_corrupted_by_arc_runtime_logging(tmp_path):
     assert result.isError is False
     assert result.content[0].text.endswith("1\tok")
     assert "Successfully loaded game class" in (tmp_path / "stderr.log").read_text()
+
+
+def test_stdio_cross_transition_gate_unlocks_with_full_history_in_same_session(
+    monkeypatch,
+    tmp_path,
+):
+    repo = Path(__file__).resolve().parents[1]
+    environments = repo / "environment_files"
+    if not environments.is_dir():
+        environments = tmp_path / "environments"
+    monkeypatch.setenv("SCHEMA_ENVIRONMENTS_DIR", str(environments))
+    game = "bp35-0a0ad940"
+    with LocusService(tmp_path, game, "turn-1") as service:
+        assert service.commit_actions([{"action": 3}], "seed left") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+    with LocusService(tmp_path, game, "turn-2") as service:
+        assert service.commit_actions([{"action": 4}], "seed right") == (
+            COMMIT_MESSAGE.format(count=1)
+        )
+
+    environment = dict(os.environ)
+    environment.update(
+        PYTHONPATH=str(repo),
+        LOCUS_WORKDIR=str(tmp_path),
+        LOCUS_GAME=game,
+        LOCUS_TURN_ID="turn-3",
+        LOCUS_TURN="3",
+        LOCUS_EVENTS=str(tmp_path / "events.jsonl"),
+    )
+    environment.setdefault("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "schema_harness.locus"],
+        env=environment,
+        cwd=tmp_path,
+    )
+
+    async def exercise_server():
+        with (tmp_path / "stderr.log").open("w", encoding="utf-8") as errors:
+            async with stdio_client(parameters, errlog=errors) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    rejected = await session.call_tool(
+                        "commit_actions",
+                        {"actions": [{"action": 7}], "reason": "probe"},
+                    )
+                    history = await session.call_tool(
+                        "read_history",
+                        {"detail": "full"},
+                    )
+                    committed = await session.call_tool(
+                        "commit_actions",
+                        {"actions": [{"action": 7}], "reason": "probe"},
+                    )
+        return rejected, history, committed
+
+    rejected, history, committed = asyncio.run(exercise_server())
+    assert rejected.isError is False
+    assert rejected.content[0].text == CROSS_TRANSITION_GATE_MESSAGE
+    assert history.isError is False
+    assert "Translated-footprint topology" in history.content[0].text
+    assert committed.isError is False
+    assert committed.content[0].text == COMMIT_MESSAGE.format(count=1)

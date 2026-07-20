@@ -5,9 +5,9 @@ isolated CLAUDE_CONFIG_DIR and checks:
   1. MCP tools load and are callable in a headless turn
   2. commit_actions works; the post-commit lock rejects later tool calls
   3. --resume continues the same session (turn 2 sees turn 1)
-  4. usage / cost are captured from --output-format json
+  4. usage / cost are captured from the audited stream-json result
   5. zero permission prompts (bypassPermissions + strict mcp)
-  6. built-ins are absent (a requested Bash call cannot run)
+  6. native tools and skills are absent (a requested Bash call cannot run)
 
 Usage: uv run python spikes/driver_probe.py [--model claude-haiku-4-5-20251001]
 """
@@ -25,7 +25,125 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 VENV_PY = REPO / ".venv" / "bin" / "python"
 STUB = REPO / "spikes" / "stub_locus.py"
-DISALLOWED = "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit,MultiEdit,BashOutput"
+
+
+def _as_text(value):
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value or ""
+
+
+def parse_stream(
+    stdout,
+    stderr,
+    *,
+    returncode,
+    timed_out,
+    expected_session_id,
+    allowed_tools,
+):
+    """Audit a Claude stream and return its terminal result record."""
+
+    expected = tuple(allowed_tools)
+    if not expected or len(expected) != len(set(expected)):
+        raise ValueError("allowed_tools must be a non-empty unique sequence")
+
+    violations = []
+    records = []
+    lines = [line for line in _as_text(stdout).splitlines() if line.strip()]
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            violations.append(f"malformed Claude stream record at line {line_number}")
+            continue
+        if not isinstance(record, dict):
+            violations.append(f"non-object Claude stream record at line {line_number}")
+            continue
+        records.append(record)
+
+    init_records = [
+        record
+        for record in records
+        if record.get("type") == "system" and record.get("subtype") == "init"
+    ]
+    if len(init_records) != 1:
+        violations.append(
+            f"Claude stream has {len(init_records)} init records; expected exactly 1"
+        )
+        init = {}
+    else:
+        init = init_records[0]
+        advertised = init.get("tools")
+        if not isinstance(advertised, list) or not all(
+            isinstance(name, str) for name in advertised
+        ):
+            violations.append("Claude init record has malformed tools")
+        elif len(advertised) != len(set(advertised)) or set(advertised) != set(expected):
+            missing = sorted(set(expected) - set(advertised))
+            unexpected = sorted(set(advertised) - set(expected))
+            violations.append(
+                "Claude tool surface differs from exact Locus allowlist: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+
+    for record in records:
+        if record.get("type") != "assistant":
+            continue
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            violations.append("Claude assistant record has malformed content")
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                violations.append("Claude assistant content block is not an object")
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if name not in expected:
+                violations.append(f"unapproved Claude tool call: {name!r}")
+
+    result_records = [record for record in records if record.get("type") == "result"]
+    if len(result_records) > 1:
+        violations.append(
+            f"Claude stream has {len(result_records)} result records; expected at most 1"
+        )
+    if not result_records and not timed_out:
+        violations.append("Claude stream ended without a result record")
+
+    result = dict(result_records[-1]) if result_records else {
+        "session_id": init.get("session_id") or expected_session_id,
+        "usage": {},
+        "total_cost_usd": 0.0,
+        "num_turns": 0,
+        "is_error": False,
+        "result": "",
+    }
+    result["timed_out"] = timed_out
+    reported_session_id = result.get("session_id")
+    if reported_session_id != expected_session_id:
+        violations.append(
+            "Claude resumed a different session: "
+            f"expected {expected_session_id!r}, got {reported_session_id!r}"
+        )
+    if returncode != 0 and not result_records:
+        violations.append(f"Claude exited {returncode} without a result record")
+    if violations:
+        prior = result.get("violations")
+        combined = [str(item) for item in prior] if isinstance(prior, list) else []
+        result["violations"] = list(dict.fromkeys(combined + violations))
+        result["is_error"] = True
+        result["result"] = (
+            "Claude driver rejected the turn: exact Locus tool audit failed. "
+            "See private driver logs."
+        )
+    elif returncode != 0:
+        result["is_error"] = True
+        if not result.get("result"):
+            result["result"] = _as_text(stderr)[:1500]
+    return result
 
 
 def oauth_token():
@@ -54,6 +172,7 @@ def run_turn(
     mcp_cfg,
     model,
     token,
+    allowed_tools,
     effort=None,
     timeout=300,
     system_prompt_file=None,
@@ -61,6 +180,9 @@ def run_turn(
     env = dict(os.environ)
     env["CLAUDE_CONFIG_DIR"] = str(config_dir)
     env["LOCUS_LOG"] = str(locus_log)
+    # Keep the fourteen Locus tools explicit in context. Claude Code otherwise
+    # defers MCP tools behind a native ToolSearch call.
+    env["ENABLE_TOOL_SEARCH"] = "false"
     if token:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     cmd = [
@@ -69,8 +191,13 @@ def run_turn(
         "--mcp-config", str(mcp_cfg),
         "--strict-mcp-config",
         "--permission-mode", "bypassPermissions",
-        "--disallowed-tools", DISALLOWED,
-        "--output-format", "json",
+        # MCP tools are unaffected by --tools; an empty value removes every
+        # native tool. Skills are a separate surface and need their own switch.
+        "--tools", "",
+        "--disable-slash-commands",
+        "--disallowed-tools", "Skill,ToolSearch,MCPSearch",
+        "--output-format", "stream-json",
+        "--verbose",
     ]
     if effort:
         cmd += ["--effort", effort]
@@ -79,16 +206,26 @@ def run_turn(
     cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
     try:
         proc = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        print(f"  [claude turn timed out after {timeout}s — treated as a no-commit turn]")
-        return None
+    except subprocess.TimeoutExpired as exc:
+        print(f"  [claude turn timed out after {timeout}s — stream audit failed; aborting invocation]")
+        return parse_stream(
+            exc.stdout,
+            exc.stderr,
+            returncode=-9,
+            timed_out=True,
+            expected_session_id=session_id,
+            allowed_tools=allowed_tools,
+        )
     if proc.returncode != 0:
         print(f"  [claude exited {proc.returncode}] stderr:\n{proc.stderr[:1500]}")
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        print(f"  [non-JSON stdout]:\n{proc.stdout[:1500]}")
-        return None
+    return parse_stream(
+        proc.stdout,
+        proc.stderr,
+        returncode=proc.returncode,
+        timed_out=False,
+        expected_session_id=session_id,
+        allowed_tools=allowed_tools,
+    )
 
 
 def main():
@@ -113,7 +250,11 @@ def main():
     mcp_cfg = tmp / "mcp.json"
     mcp_cfg.write_text(json.dumps({
         "mcpServers": {
-            "locus": {"command": str(VENV_PY), "args": [str(STUB)]}
+            "locus": {
+                "command": str(VENV_PY),
+                "args": [str(STUB)],
+                "alwaysLoad": True,
+            }
         }
     }))
 
@@ -132,7 +273,9 @@ def main():
     )
     print("== turn 1 ==")
     r1 = run_turn(msg1, session_id=sid, resume=False, cwd=workdir,
-                  config_dir=config_dir, locus_log=locus_log, mcp_cfg=mcp_cfg, model=args.model, token=token)
+                  config_dir=config_dir, locus_log=locus_log, mcp_cfg=mcp_cfg,
+                  model=args.model, token=token,
+                  allowed_tools=("mcp__locus__echo_state", "mcp__locus__commit_actions"))
     if r1:
         checks["turn1_returned_json"] = True
         checks["usage_captured"] = bool(r1.get("usage")) or (r1.get("total_cost_usd") is not None)
@@ -148,7 +291,9 @@ def main():
     )
     print("== turn 2 (resume) ==")
     r2 = run_turn(msg2, session_id=sid, resume=True, cwd=workdir,
-                  config_dir=config_dir, locus_log=locus_log, mcp_cfg=mcp_cfg, model=args.model, token=token)
+                  config_dir=config_dir, locus_log=locus_log, mcp_cfg=mcp_cfg,
+                  model=args.model, token=token,
+                  allowed_tools=("mcp__locus__echo_state", "mcp__locus__commit_actions"))
     if r2:
         # Resume is confirmed by session continuity: turn 2 ran under the same session id
         # without re-initializing (no 'not logged in' / new-session error).
