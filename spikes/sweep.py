@@ -199,6 +199,10 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
         state, level, hist, turns_done = snapshot_state(wd)
         log(f"{game} [{tag}] inv={invocations} state={state} lvl={level} "
             f"hist={hist} turns={turns_done} max_turns={max_turns}")
+        if "another live Schema harness run is active" in out:
+            raise RuntimeError(
+                f"{game}: harness live-lock contention (another runner active) — "
+                f"aborting to avoid a false-0.0 cascade; kill stray runners first")
         if state == "WIN" or hist >= MAX_ACTIONS:
             continue
         if "driver returned an error" in out:
@@ -228,9 +232,31 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
         log(f"{game} [{tag}] unknown stop; tail: {out[-250:]}")
         break
     res = score_game(wd)
+    if res["state"] in ("NO_RUN", "SCORE_FAIL"):
+        raise RuntimeError(
+            f"{game}: no scorable run produced (state={res['state']}) — aborting "
+            f"instead of recording a false 0.0 (env problem, not a game result)")
     log(f"{game} [{tag}] SCORED rhae={res['rhae']} state={res['state']} "
         f"levels={res['levels']}")
     return res
+
+
+def _assert_lock_free() -> None:
+    """Refuse to start if the harness live-lock is already held (orphaned runner)."""
+    import fcntl
+    lock_path = Path(tempfile.gettempdir()) / f"schema-harness-live-{os.getuid()}.lock"
+    if not lock_path.exists():
+        return
+    fd = os.open(str(lock_path), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        raise SystemExit(
+            "ABORT: harness live-lock is held — an orphaned runner is active. "
+            "Kill it (pkill -9 -f schema_harness.runner) before starting.")
+    finally:
+        os.close(fd)
 
 
 def benchmark_mean(ledger, phase, games) -> float:
@@ -245,14 +271,20 @@ def run_phase(phase: str, games: list) -> None:
     ledger.setdefault(phase, {})
     log(f"===== PHASE {phase} START ({cfg['model']} {cfg['primary_effort']}) "
         f"over {len(games)} games: {','.join(games)} =====")
+    _assert_lock_free()
     for game in games:
         g = ledger[phase].setdefault(game, {})
         if g.get("primary_done"):
             log(f"{game} primary already done: {g['primary']['rhae']}%")
             continue
         log(f"--- {phase} PRIMARY {game} ---")
-        g["primary"] = run_game(phase, game, cfg["model"],
-                                cfg["primary_effort"], cfg["provider"], "primary")
+        try:
+            g["primary"] = run_game(phase, game, cfg["model"],
+                                    cfg["primary_effort"], cfg["provider"], "primary")
+        except RuntimeError as exc:
+            log(f"ABORT PHASE (primary {game}): {exc}")
+            save_ledger(ledger)
+            return
         g["primary_done"] = True
         if g["primary"]["rhae"] >= 80:
             g["final"] = g["primary"]
@@ -267,8 +299,13 @@ def run_phase(phase: str, games: list) -> None:
             save_ledger(ledger)
             continue
         log(f"--- {phase} FALLBACK {game} (primary {g['primary']['rhae']}%) ---")
-        g["fallback"] = run_game(phase, game, cfg["fallback_model"],
-                                 cfg["fallback_effort"], cfg["provider"], "fallback")
+        try:
+            g["fallback"] = run_game(phase, game, cfg["fallback_model"],
+                                     cfg["fallback_effort"], cfg["provider"], "fallback")
+        except RuntimeError as exc:
+            log(f"ABORT PHASE (fallback {game}): {exc}")
+            save_ledger(ledger)
+            return
         g["fallback_done"] = True
         g["final"] = (g["fallback"] if g["fallback"]["rhae"] > g["primary"]["rhae"]
                       else g["primary"])
