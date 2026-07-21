@@ -64,12 +64,17 @@ source of truth, not any number hardcoded in prose.
   blog's Sol pairing, target 95.35%). Opus phase = Opus 4.8 max + Fable 5 fallback
   (the flagship pairing, target 98.98%). Effort `ultra` runs but is too token-heavy
   to finish long games; xhigh is the blog's own primary.
-- **Contamination.** Several public games' mechanics were visible in the blog text
-  read during reconstruction (bp35 is the designated dev game; ls20/ft09/wa30/m0r0
-  and trace-card mentions sk48/g50t/ar25 were discussed). The agent plays them fresh,
-  but a clean-room replication should weight the fully-held-out games — e.g. **tu93,
-  never touched in design, scores 9/9 = 100%** — over the spoiled ones. Report the
-  full-25 mean and a clean-subset mean separately.
+- **Contamination.** 14 of the 25 public games are not clean for a replication
+  claim: the blog text read during reconstruction contains detailed mechanism
+  case studies for ls20, ft09, wa30, m0r0, re86, ka59, dc22, lf52, and sb26, plus
+  backtest/plan-size mentions of sk48, g50t, and ar25 (2026-07-20 re-audit of the
+  full page text — earlier partial fetches missed the expandable case studies);
+  bp35 is the designated dev game (its released trace drives replay parity and
+  smokes); r11l was the design-iteration game. The agent itself never sees the
+  blog — the contamination channel is harness/prompt design, not gameplay hints —
+  but the honest split weights the **11 fully-held-out games: cd82, cn04, lp85,
+  s5i5, sc25, sp80, su15, tn36, tr87, vc33, tu93** (tu93, never touched in design,
+  scores 9/9 = 100%). Report the full-25 mean and the clean-11 mean separately.
 - **Known critiques** of the original (self-reported; public-set-known-in-advance;
   fallback ≈ pass@2) apply to any reproduction. The mitigation here is that the
   harness and every trace are open: re-run it yourself.

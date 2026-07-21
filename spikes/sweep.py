@@ -35,15 +35,21 @@ GAMES = [
 ]
 
 # Contamination split (see REPRODUCE.md): CLEAN = never blog-spoiled and never used
-# in tuning; CONTAMINATED = blog-discussed mechanics/trace-card mentions or a dev game.
-# CLEAN is ordered hardest-first (by human baseline total) so the long-game stress
-# tests run while quota is freshest. Subsets accumulate into one ledger, so
-# `sweep.py sol clean` then `sweep.py sol rest` yields the full 25.
+# in tuning; CONTAMINATED = blog-discussed mechanics/trace mentions, or a dev game.
+# 2026-07-20 re-audit against the FULL blog text (earlier fetches missed the expandable
+# case studies): re86/ka59/dc22/lf52/sb26 have detailed mechanism case studies in the
+# post (Evidence 1A/1B/2A/2B/2C), so they move to CONTAMINATED. The true held-out set
+# is 11 games. Both lists run cheapest-first (ascending human baseline total) to
+# maximize completed games per subscription-quota window; per-game protocol (budgets,
+# <80 fallback) is unchanged, so ordering does not affect any score.
 CLEAN = [
-    "lf52", "re86", "dc22", "cn04", "ka59", "s5i5", "sp80", "vc33", "tr87",
-    "lp85", "su15", "sc25", "tn36", "sb26", "cd82", "tu93",
+    "cd82", "tn36", "sc25", "su15", "lp85", "tr87", "vc33", "sp80", "s5i5",
+    "cn04", "tu93",
 ]
-CONTAMINATED = ["bp35", "ls20", "ft09", "wa30", "m0r0", "sk48", "g50t", "ar25", "r11l"]
+CONTAMINATED = [
+    "ft09", "sb26", "bp35", "ka59", "ls20", "g50t", "sk48", "m0r0", "dc22",
+    "re86", "lf52", "wa30", "ar25", "r11l",
+]
 SUBSETS = {"clean": CLEAN, "rest": CONTAMINATED, "contaminated": CONTAMINATED, "full": GAMES}
 
 PHASES = {
