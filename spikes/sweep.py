@@ -235,6 +235,18 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
                 break
             max_turns = min(MAX_TURNS_CAP, max_turns + TURN_GROW)
             continue
+        if turns_done >= max_turns:
+            # Turn budget exhausted mid-game. The runner prints no reliable stop
+            # string for this (stdout just ends with "=== EXIT ==="), so infer it
+            # from the events snapshot — never score a game that still has budget
+            # headroom and momentum.
+            if max_turns >= MAX_TURNS_CAP:
+                log(f"{game} [{tag}] hit MAX_TURNS_CAP; giving up")
+                break
+            max_turns = min(MAX_TURNS_CAP, max_turns + TURN_GROW)
+            log(f"{game} [{tag}] turn budget exhausted at {turns_done}; "
+                f"growing to {max_turns}")
+            continue
         log(f"{game} [{tag}] unknown stop; tail: {out[-250:]}")
         break
     res = score_game(wd)
