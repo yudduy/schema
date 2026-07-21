@@ -34,6 +34,18 @@ GAMES = [
     "sp80", "su15", "tn36", "tr87", "tu93", "vc33", "wa30",
 ]
 
+# Contamination split (see REPRODUCE.md): CLEAN = never blog-spoiled and never used
+# in tuning; CONTAMINATED = blog-discussed mechanics/trace-card mentions or a dev game.
+# CLEAN is ordered hardest-first (by human baseline total) so the long-game stress
+# tests run while quota is freshest. Subsets accumulate into one ledger, so
+# `sweep.py sol clean` then `sweep.py sol rest` yields the full 25.
+CLEAN = [
+    "lf52", "re86", "dc22", "cn04", "ka59", "s5i5", "sp80", "vc33", "tr87",
+    "lp85", "su15", "sc25", "tn36", "sb26", "cd82", "tu93",
+]
+CONTAMINATED = ["bp35", "ls20", "ft09", "wa30", "m0r0", "sk48", "g50t", "ar25", "r11l"]
+SUBSETS = {"clean": CLEAN, "rest": CONTAMINATED, "contaminated": CONTAMINATED, "full": GAMES}
+
 PHASES = {
     "sol": {
         "provider": "codex", "model": "gpt-5.6-sol",
@@ -221,18 +233,19 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
     return res
 
 
-def benchmark_mean(ledger, phase) -> float:
-    finals = [ledger[phase][g]["final"]["rhae"] for g in GAMES
+def benchmark_mean(ledger, phase, games) -> float:
+    finals = [ledger[phase][g]["final"]["rhae"] for g in games
               if g in ledger[phase] and "final" in ledger[phase][g]]
     return sum(finals) / len(finals) if finals else 0.0
 
 
-def run_phase(phase: str) -> None:
+def run_phase(phase: str, games: list) -> None:
     cfg = PHASES[phase]
     ledger = load_ledger()
     ledger.setdefault(phase, {})
-    log(f"===== PHASE {phase} START ({cfg['model']} {cfg['primary_effort']}) =====")
-    for game in GAMES:
+    log(f"===== PHASE {phase} START ({cfg['model']} {cfg['primary_effort']}) "
+        f"over {len(games)} games: {','.join(games)} =====")
+    for game in games:
         g = ledger[phase].setdefault(game, {})
         if g.get("primary_done"):
             log(f"{game} primary already done: {g['primary']['rhae']}%")
@@ -244,7 +257,7 @@ def run_phase(phase: str) -> None:
         if g["primary"]["rhae"] >= 80:
             g["final"] = g["primary"]
         save_ledger(ledger)
-    for game in GAMES:
+    for game in games:
         g = ledger[phase][game]
         if "final" in g:
             continue
@@ -260,9 +273,9 @@ def run_phase(phase: str) -> None:
         g["final"] = (g["fallback"] if g["fallback"]["rhae"] > g["primary"]["rhae"]
                       else g["primary"])
         save_ledger(ledger)
-    mean = benchmark_mean(ledger, phase)
+    mean = benchmark_mean(ledger, phase, games)
     log(f"===== PHASE {phase} DONE: BENCHMARK MEAN RHAE = {mean:.2f}% "
-        f"over {len(GAMES)} games =====")
+        f"over {len(games)} games ({','.join(games)}) =====")
     save_ledger(ledger)
 
 
@@ -280,4 +293,8 @@ if __name__ == "__main__":
     if phase == "selftest":
         selftest()
     else:
-        run_phase(phase)
+        subset = sys.argv[2] if len(sys.argv) > 2 else "full"
+        games = SUBSETS.get(subset)
+        if games is None:
+            raise SystemExit(f"unknown subset {subset!r}; choose from {list(SUBSETS)}")
+        run_phase(phase, games)
