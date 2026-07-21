@@ -201,3 +201,29 @@ Live validation used the Codex CLI (`codex-cli 0.144.1`, ChatGPT-subscription au
 **Clean generalization — tu93 (fully held-out), Sol xhigh, v9 prompt: `9/9 levels, 100.00% RHAE` (official vendored scorer, State=WIN).** tu93 was never touched during design (a true held-out game, unlike r11l which is v9's development habitat), so this is the clean generalization result the r11l WIN could not claim. Per-level actions vs human: L0 18/19, L1 15/16, L2 19/34, L3 17/42, L4 63/123, L5 28/80, L6 14/14, L7 21/23, L8 29/111 → per-level RHAE 111/114/115/115/115/115/100/115/115. Cleared in 47 turns (35 `run_bfs`, 84 backtests, 32 green-gated multi-action commits, 31 surprises), ~57M tokens — markedly more efficient than r11l. Provenance: two invocations on one workdir (`/private/tmp/schema-val-xhigh-tu93-1784554148`); the first reached 8/9 and stopped on `max_turns=45` mid-L8, resumed after raising only `max_turns`→65 (correctness metadata untouched); L8 cleared in 2 further turns.
 
 **Two-game result: r11l 6/6 = 100.00% + tu93 (held-out) 9/9 = 100.00% → mean 100.00% RHAE with Sol xhigh + v9 prompt.** This reproduces and on these two games exceeds the blog's reported GPT-5.6-Sol figure (95.35%). Both games cleared every level at 100–115% per-level efficiency (matching or beating the human baseline throughout). M1 (held-out level), a full single-game clear, and **M3 (clean two-game generalization)** are now all demonstrated. Remaining open work is scale, not capability: a full 25-game sweep is bounded by subscription token volume (~30–120M tokens/game), not by the harness.
+
+## Sweep residual analysis: where sub-80 primaries spend their actions (2026-07-21)
+
+Both sub-80 clean-set primaries **completed their games** (tn36 7/7 → 71.93; sc25 6/6 → 61.44);
+the residual is concentrated overspend, mirroring the blog's own "residual is concentrated" pattern.
+Per-level attribution from `events.jsonl` (actions attributed to the level active when taken):
+
+**tn36 — 2364 actions vs human 317 (7.46×).** Bimodal: L1 (+1469) and L5 (+549) carry 98.6% of the
+excess. L1 is *goal-blindness, not model failure*: dynamics were click-solved by turn 32 (124 probing
+actions), after which the agent ran a fully model-predicted, zero-surprise exhaustive Gray-code sweep
+of all 1024 toggle configurations hunting the goal predicate, until turn 52 found the 2-bit command
+encoding. L5 was rule-space search with expensive tests: each falsified actuator-ordering hypothesis
+cost a 21–30-action reset-and-rebuild while the world model stayed replay-exact (v90: 2217/2217).
+Post-click L6–L7 ran **below** human baseline (0.78×, 0.77×). Level-index weighting is why 7.46×
+total overspend still scores 71.93: the waste sat on the lightest weights.
+
+**sc25 — 530 actions vs human 350 (1.51×).** Net overspend is entirely L3 (+90; post-click mechanical
+grind — model-verified sweeps burning a 32-phase bar) and L4 (+89; the true discovery wall: 30
+surprises, 8 run_bfs). L5 hit exact parity (0.99×); L6 stayed above (1.36×) with surprises persisting
+to the winning action — rule learning never fully stopped.
+
+**Cross-cutting:** in both games the certified-model machinery worked (backtests green, BFS plans
+executed clean); the cost was *which experiment to run next* — goal discovery (tn36 L1) and
+hypothesis selection (tn36 L5, sc25 L4). That is precisely the axis the blog's Observation 2 assigns
+to model choice rather than harness, which is why the protocol's Sol-max fallback rerun (fresh run,
+different effort) has a genuine shot at recovering both.
