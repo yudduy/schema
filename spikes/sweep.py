@@ -63,9 +63,9 @@ MAX_ACTIONS = 3000
 START_MAX_TURNS = 80
 TURN_GROW = 40
 MAX_TURNS_CAP = 400
-MAX_INVOCATIONS = 60
-MAX_DRIVER_RETRIES = 24
-NO_PROGRESS_GIVEUP = 3
+MAX_INVOCATIONS = 100_000        # patient: don't cap out on ride-out retries
+MAX_DRIVER_RETRIES = 100_000     # network/quota walls are ridden out, never failed
+NO_PROGRESS_GIVEUP = 3           # genuine agent stalls still move on (don't block the sweep)
 TURN_TIMEOUT = 3600
 TURN_TOKEN_CAP = 20_000_000
 
@@ -203,12 +203,12 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
             continue
         if "driver returned an error" in out:
             driver_retries += 1
-            if driver_retries > MAX_DRIVER_RETRIES:
-                log(f"{game} [{tag}] too many driver errors; giving up")
-                break
-            wait = min(3600, 900 * driver_retries)
-            log(f"{game} [{tag}] driver error (rate limit?), backoff {wait}s "
-                f"(retry {driver_retries}/{MAX_DRIVER_RETRIES})")
+            if driver_retries == 3:
+                log(f"{game} [{tag}] WALL: sustained driver errors — likely quota "
+                    f"exhausted or network down. NOT stopping: retrying every ~10min; "
+                    f"auto-resumes when a fresh account is logged in or quota resets.")
+            wait = min(600, 120 * driver_retries)
+            log(f"{game} [{tag}] driver error, backoff {wait}s (retry {driver_retries})")
             time.sleep(wait)
             continue
         if "no progress" in out:
