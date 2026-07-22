@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path("/Users/c-dnguyen/Documents/project/schema")
+REPO = Path(__file__).resolve().parents[1]
 ROOT = Path.home() / "schema-sweep"
 RELEASE = ROOT / "release"
 

@@ -22,7 +22,7 @@ from pathlib import Path
 
 os.environ.setdefault("ONLY_RESET_LEVELS", "true")
 
-REPO = Path("/Users/c-dnguyen/Documents/project/schema")
+REPO = Path(__file__).resolve().parents[1]
 ROOT = Path.home() / "schema-sweep"
 ROOT.mkdir(exist_ok=True)
 LEDGER = ROOT / "ledger.json"
@@ -132,6 +132,37 @@ def reconcile_budget(wd: Path, max_turns: int) -> None:
         rj.write_text(json.dumps(d, indent=2))
 
 
+WATCHDOG_GRACE = 900  # events.jsonl quiet for TURN_TIMEOUT+this => hung driver, kill group
+
+
+def _wait_with_watchdog(proc, ev_path: Path, start_ts: float, max_quiet: float,
+                        poll: float = 60) -> bool:
+    """Wait for proc; if ev_path sees no writes for max_quiet seconds, SIGKILL its
+    process group (a codex stream stuck on a dead network read never returns and
+    the runner's turn timeout cannot see it). Returns True iff the watchdog fired."""
+    while True:
+        try:
+            proc.wait(timeout=poll)
+            return False
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            last = ev_path.stat().st_mtime
+        except OSError:
+            last = start_ts
+        if time.time() - last > max_quiet:
+            import signal
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            return True
+
+
 def run_once(game, wd, model, effort, provider, max_turns) -> str:
     env = dict(os.environ, ONLY_RESET_LEVELS="true")
     reconcile_budget(wd, max_turns)
@@ -146,8 +177,17 @@ def run_once(game, wd, model, effort, provider, max_turns) -> str:
     ]
     if provider == "claude":
         cmd += ["--run-cost-cap", "100000", "--turn-cost-cap", "10000"]
-    r = subprocess.run(cmd, cwd=str(REPO), env=env, capture_output=True, text=True)
-    return (r.stdout or "") + "\n" + (r.stderr or "")
+    log_path = ROOT / f"runner-{wd.name}.log"
+    with open(log_path, "w") as fh:
+        proc = subprocess.Popen(cmd, cwd=str(REPO), env=env, stdout=fh,
+                                stderr=subprocess.STDOUT, text=True,
+                                start_new_session=True)
+        hung = _wait_with_watchdog(proc, wd / "events.jsonl", time.time(),
+                                   TURN_TIMEOUT + WATCHDOG_GRACE)
+    out = log_path.read_text()
+    if hung:
+        out += "\nWATCHDOG-HANG-KILLED\n"
+    return out
 
 
 def score_game(wd: Path) -> dict:
@@ -210,6 +250,11 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
                 f"{game}: harness live-lock contention (another runner active) — "
                 f"aborting to avoid a false-0.0 cascade; kill stray runners first")
         if state == "WIN" or hist >= MAX_ACTIONS:
+            continue
+        if "WATCHDOG-HANG-KILLED" in out:
+            log(f"{game} [{tag}] hang watchdog fired (events quiet "
+                f">{TURN_TIMEOUT + WATCHDOG_GRACE}s — dead network stream?); re-invoking")
+            time.sleep(30)
             continue
         if "driver returned an error" in out:
             driver_retries += 1
@@ -350,6 +395,9 @@ if __name__ == "__main__":
     else:
         subset = sys.argv[2] if len(sys.argv) > 2 else "full"
         games = SUBSETS.get(subset)
+        if games is None and subset in GAMES:
+            games = [subset]   # single-game invocation, e.g. `sweep.py sol wa30`
         if games is None:
-            raise SystemExit(f"unknown subset {subset!r}; choose from {list(SUBSETS)}")
+            raise SystemExit(f"unknown subset {subset!r}; choose from "
+                             f"{list(SUBSETS)} or a single game id")
         run_phase(phase, games)
