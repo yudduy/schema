@@ -10,7 +10,9 @@ just how to run games.
 
 ## You need
 
-- macOS or Linux, [uv](https://docs.astral.sh/uv/), Node 22+
+- **macOS** (required to *run* games: the deny-by-default agent sandbox is built on
+  macOS `sandbox-exec` and fails closed elsewhere — Linux can verify/score traces but
+  not play), [uv](https://docs.astral.sh/uv/), Node 22+
 - A ChatGPT subscription (your own — higher tiers have much larger Codex quotas; one hard
   game can consume 50–150M tokens)
 - A free ARC Prize API key (sign up at the ARC-AGI-3 site, three.arcprize.org)
