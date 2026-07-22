@@ -71,6 +71,17 @@ def main() -> None:
             "primary_rhae": rec.get("primary", {}).get("rhae"),
             "used_fallback": "fallback" in rec and rec["final"] is rec.get("fallback"),
         }
+        # Transparency the original release lacks: when the retained run is the
+        # fallback, also publish the failed primary's trace.
+        prim = rec.get("primary") or {}
+        pwd = Path(prim.get("workdir", ""))
+        if prim and str(pwd) != str(wd) and (pwd / "events.jsonl").exists():
+            pdst = out_traces / f"{game}-primary"
+            pdst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pwd / "events.jsonl", pdst / "events.jsonl")
+            if (pwd / "run.json").exists():
+                shutil.copy2(pwd / "run.json", pdst / "run.json")
+            manifest["games"][game]["primary_events_sha256"] = sha256(pwd / "events.jsonl")
         scored.append(final["rhae"])
 
     manifest["n_games_scored"] = len(scored)
