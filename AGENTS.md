@@ -49,4 +49,4 @@ Use concise Conventional Commit messages such as `fix: preserve replay sequence 
 
 ## Security & Configuration
 
-Copy `.env.example` to `.env` when an ARC API key is needed; anonymous access is supported. Never commit `.env`, API keys, downloaded environments, recordings, or per-run credentials. Use `ONLY_RESET_LEVELS=true` for parity-sensitive harness runs as specified in `docs/contract.md` — it is mandatory for codex live runs (the runner refuses without it) and for `spikes/replay_parity.py` (parity goes RED without it).
+Copy `.env.example` to `.env` when an ARC API key is needed; anonymous access is supported. Never commit `.env`, API keys, downloaded environments, recordings, or per-run credentials. Use `ONLY_RESET_LEVELS=true` for parity-sensitive harness runs as specified in `docs/contract.md` — it is mandatory for codex live runs (the runner refuses without it); `spikes/replay_parity.py` self-forces it during verification (restoring the prior value after), so its `verify_events` gate needs no caller setup.
