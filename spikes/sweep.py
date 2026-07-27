@@ -99,7 +99,7 @@ def save_ledger(ledger: dict) -> None:
 
 
 def snapshot_state(wd: Path):
-    """(state, level, history_len) parsed straight from events.jsonl — no imports."""
+    """(state, level, history_len, turn_count) parsed from events.jsonl — no imports."""
     ev = wd / "events.jsonl"
     state, level, hist, turns = None, 0, 0, 0
     if not ev.exists():

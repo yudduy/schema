@@ -45,10 +45,10 @@ def main() -> None:
 
     run = json.loads(rj.read_text())
     driver = run.get("driver", {})
-    # Bind the replayed game to the SAME identifier the scorer baselines RHAE
-    # against (run.json's game_id, short form) — never the workdir name. Otherwise a
-    # genuine easy-game trace, relabeled to a harder game_id, would replay green while
-    # being scored against the harder baseline (a maxed score for a game never played).
+    # Bind the replayed game to the full versioned run.json.game_id, never the workdir
+    # name. Otherwise a genuine easy-game trace, relabeled to a harder game_id, would
+    # replay green while being scored against the harder baseline (a maxed score for a
+    # game never played).
     game_id = str(run.get("game_id") or "")
     if not game_id:
         raise SystemExit(f"REJECT: {wd} run.json has no game_id — cannot bind the "

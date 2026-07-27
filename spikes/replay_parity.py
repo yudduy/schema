@@ -133,8 +133,8 @@ def verify_events(events_path, game, *, offline: bool = True, verbose: bool = Fa
     (levels, state) matching what the trace records. Any parse or replay failure is
     red — an unreproducible trace is not trusted.
 
-    `game` MUST be the identifier the SCORER baselines RHAE against (run.json's
-    game_id, short form) — callers derive it from game_id, not the workdir name, so
+    `game` MUST be the full versioned `run.json.game_id` that identifies the
+    environment replayed. Callers derive it from run.json, not the workdir name, so
     the replay engine and the RHAE baseline reference the same game. Otherwise a
     genuine easy-game trace could be scored against a harder game's baseline.
 
