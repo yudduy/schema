@@ -1,52 +1,72 @@
-# Repository Guidelines
+# Agent guidance
 
-## Working rules
+## Architectural constraints
 
-The two-lane experiment (METHOD/TOOLING) is finished and consolidated. Charters are
-archived at `docs/GOAL1.md` / `docs/GOAL2.md`, lane ledgers at `docs/RESULTS-method.md` /
-`docs/RESULTS-tooling.md`, and lane history under the `archive/goal1`, `archive/goal2`,
-and `archive/two-lane-base` tags.
+- `docs/contract.md` is frozen and read-only. Preserve its contamination and
+  game-agnostic boundaries: never inspect game source under `environment_files/`,
+  derive solutions from fixtures, or expose repository internals to the playing agent.
+- Treat `vendor/` as immutable reference evidence. Keep live workdirs outside the
+  repository, and never commit generated environments, recordings, credentials, or
+  sweep artifacts.
+- Only one live run may exist per machine. The runner owns the global
+  `$TMPDIR/schema-harness-live-<uid>.lock`; never bypass the lock or terminate a run
+  merely to acquire it.
+- Live games require macOS because the agent jail uses `sandbox-exec`.
+  `ONLY_RESET_LEVELS=true` is mandatory, and live Codex runs require exactly
+  `codex-cli 0.144.1`.
+- A workdir is a durable trajectory identity: `run.json` pins its game, provider,
+  model, effort, prompt, driver policy, CLI, and model catalog. Resume it with matching
+  settings instead of repurposing it.
+- Deep BFS has a 600-second default budget. Use `--turn-timeout 3600` so BFS and the
+  surrounding model turn fit within the driver timeout.
 
-1. Single branch (`main`), single working tree. `docs/contract.md` stays frozen —
-   treat it as read-only.
-2. Commit via `committer "<msg>" <file...>` — it stages only the named paths
-   (renames need both old and new paths). Never `git add -A` / `git add .` /
-   `git commit -a`; no amend.
-3. Conventional Commits; commit small and often, green tests first
-   (`uv run pytest -q`); behavior changes land tests before implementation.
-4. **One live run at a time.** The runner enforces a global lock at
-   `$TMPDIR/schema-harness-live-<uid>.lock`; never work around it.
-5. Live codex runs are pinned to exactly `codex-cli 0.144.1`; do not upgrade the
-   CLI without revalidating the runner's catalog handling.
-6. Deep-BFS runs (600s default BFS budget) should pass `--turn-timeout 3600` so a
-   BFS call plus model work fits inside the per-turn/tool timeout.
+## Canonical implementation paths
 
-## Project Structure & Module Organization
+- Run lifecycle, short-to-versioned game-ID resolution, resume metadata, provider
+  policy, and the default prompt: `schema_harness/runner.py`.
+- Ground-truth engine state and transitions: `schema_harness/gateway.py`. Agent tool
+  authorization and commit gates: `schema_harness/locus.py` and
+  `schema_harness/guard.py`.
+- Event records and durable JSONL writes: `schema_harness/events.py`.
+- World-model loading/execution, parity checks, planning, and search:
+  `schema_harness/model_loader.py`, `schema_harness/model_worker.py`,
+  `schema_harness/backtest.py`, and `schema_harness/bfs.py`.
+- Contributor/release replay gate: `spikes/replay_parity.py`. Sweep orchestration,
+  intake, and verified export: `spikes/sweep.py`, `spikes/intake.py`, and
+  `spikes/export_traces.py`.
+- RHAE semantics and human baselines: `vendor/score_trajectories.py` and
+  `vendor/baseline_actions.csv`. Wrappers may adapt inputs and output, but must not
+  reimplement the score.
 
-`schema_harness/` contains harness code: event logging, runner orchestration, model loading, gateway isolation, replay verification, backtesting, and BFS support. Root entry points are `play.py`, a short interactive smoke test, and `agent.py`, a minimal random agent. Tests live in `tests/` and mirror harness modules with `test_<behavior>.py` names. Protocol and contract details belong in `docs/`; exploratory validation scripts belong in `spikes/`. Treat `vendor/` traces, models, and scoring utilities as reference fixtures. `environment_files/` and `recordings/` are generated and ignored by Git.
+## Validation and commits
 
-## Build, Test, and Development Commands
+Run the complete suite before handoff:
 
-- `uv sync` installs the Python 3.12 project and development dependencies from `uv.lock`.
-- `uv run pytest` runs the complete test suite.
-- `uv run pytest tests/test_events.py -q` runs one focused test module.
-- `uv run play.py` renders the LS20 quickstart in the terminal.
-- `uv run agent.py --game vc33 --render` runs the sample agent on a selected game.
+```bash
+uv run pytest -q
+```
 
-There is no separate build step. Run Python commands through `uv run` so they use the locked environment.
+For replay or scoring changes, also run the focused acceptance checks:
 
-## Coding Style & Naming Conventions
+```bash
+uv run pytest -q tests/test_replay_bp35.py tests/test_replay_verify_gate.py
+ONLY_RESET_LEVELS=true uv run python spikes/replay_parity.py \
+  vendor/bp35_events.jsonl --game bp35-0a0ad940
+```
 
-Use four-space indentation, type annotations, and standard Python naming: `snake_case` for modules, functions, and variables; `PascalCase` for classes; and uppercase names for constants. Keep imports grouped as standard library, third-party, then local. Prefer small typed functions, frozen/slot dataclasses for immutable records, and `pathlib.Path` for paths, following existing code. No formatter or linter is configured, so match nearby style and keep lines readable.
+Commit with `committer "<conventional message>" <exact paths...>`. Never stage the
+whole tree, amend, push without instruction, or absorb unknown working-tree changes.
 
-## Testing Guidelines
+## Common failure modes
 
-Tests use pytest. Name files and functions `test_*.py` and `test_<expected_behavior>`. Add focused regression coverage for contract, replay, state-machine, or serialization changes; use deterministic fixtures and pytest helpers such as `tmp_path` and `monkeypatch`. No coverage threshold is configured, but the full 30-test suite must pass before review. Preserve the contamination boundaries documented in `docs/contract.md`.
-
-## Commit & Pull Request Guidelines
-
-Use concise Conventional Commit messages such as `fix: preserve replay sequence numbers`, and keep each commit scoped to one concern. Pull requests should explain the motivation and behavioral impact, link relevant issues, list verification commands, and call out contract or fixture changes. Include terminal screenshots only when rendered output changes.
-
-## Security & Configuration
-
-Copy `.env.example` to `.env` when an ARC API key is needed; anonymous access is supported. Never commit `.env`, API keys, downloaded environments, recordings, or per-run credentials. Use `ONLY_RESET_LEVELS=true` for parity-sensitive harness runs as specified in `docs/contract.md` — it is mandatory for codex live runs (the runner refuses without it); `spikes/replay_parity.py` self-forces it during verification (restoring the prior value after), so its `verify_events` gate needs no caller setup.
+- Linux live play fails closed; verification and scoring remain portable.
+- A missing `ONLY_RESET_LEVELS=true`, a Codex version mismatch, a changed catalog, or
+  mismatched resume settings is a hard refusal, not a reason to weaken validation.
+- Live-lock contention means another run owns the machine. Wait for it; do not work
+  around the lock.
+- A deep BFS under the ordinary short turn timeout can be killed before model work
+  resumes.
+- Under machine load,
+  `tests/test_locus_jail.py::test_commit_predictions_interleave_with_real_steps_and_timeout_durably`
+  can flake. Re-run that exact test in isolation to confirm; do not change its behavior
+  as part of unrelated work.
