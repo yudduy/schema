@@ -10,7 +10,6 @@ it resumes cleanly after any interruption (including a reboot + relaunch).
 Usage:  ONLY_RESET_LEVELS=true uv run python spikes/sweep.py <phase>
         phase in {sol, opus, selftest}
 """
-import csv
 import json
 import os
 import re
@@ -66,47 +65,7 @@ PHASES = {
     },
 }
 
-# RHAE squares the action-efficiency ratio (per-level min((human/agent)^2, 1.15)), so a
-# run that has already spent a large multiple of the human baseline cannot produce a
-# useful score no matter how it finishes. At 2x baseline the per-level ceiling is ~25%,
-# i.e. far below the <80 fallback threshold — so the honest move is to stop and let the
-# stronger fallback config take the game. A flat cap is the bug this replaces: 3000 was
-# ~6x baseline for a small game, which is how sp80 burned 2897 actions without clearing
-# level 1, and tn36 spent 2364 (7.5x its 317 baseline) to score 71.93.
-ACTION_CAP_MULTIPLE = 2.0
-DEFAULT_ACTION_CAP = 3000        # games absent from the baselines CSV
-
-
-def _load_baselines() -> dict:
-    path = REPO / "vendor" / "baseline_actions.csv"
-    out = {}
-    try:
-        with open(path, newline="") as fh:
-            for row in csv.DictReader(fh):
-                game = (row.get("game") or "").strip()
-                total = (row.get("total_baseline_actions") or "").strip()
-                if game and total:
-                    out[game] = int(float(total))
-    except (OSError, ValueError):
-        pass
-    return out
-
-
-BASELINE = _load_baselines()
-
-
-def action_cap(game: str) -> int:
-    """Actions past which this game can no longer reach a useful RHAE.
-
-    Hitting the cap is not a failure — it hands the game to the <80 fallback pass,
-    which is exactly what the blog's protocol does with a primary that underperforms.
-    """
-    base = BASELINE.get(game)
-    if not base:
-        return DEFAULT_ACTION_CAP
-    return max(200, int(ACTION_CAP_MULTIPLE * base))
-
-
+MAX_ACTIONS = 3000
 START_MAX_TURNS = 80
 TURN_GROW = 40
 MAX_TURNS_CAP = 400
@@ -204,15 +163,14 @@ def _wait_with_watchdog(proc, ev_path: Path, start_ts: float, max_quiet: float,
             return True
 
 
-def run_once(game, wd, model, effort, provider, max_turns,
-             max_actions=DEFAULT_ACTION_CAP) -> str:
+def run_once(game, wd, model, effort, provider, max_turns) -> str:
     env = dict(os.environ, ONLY_RESET_LEVELS="true")
     reconcile_budget(wd, max_turns)
     cmd = [
         sys.executable, "-m", "schema_harness.runner",
         "--provider", provider, "--model", model, "--game", game,
         "--effort", effort,
-        "--max-turns", str(max_turns), "--max-actions", str(max_actions),
+        "--max-turns", str(max_turns), "--max-actions", str(MAX_ACTIONS),
         "--turn-timeout", str(TURN_TIMEOUT), "--no-progress-turns", "8",
         "--turn-token-cap", str(TURN_TOKEN_CAP), "--run-token-cap", "0",
         "--workdir", str(wd),
@@ -266,7 +224,6 @@ def score_game(wd: Path) -> dict:
 
 def run_game(phase, game, model, effort, provider, tag) -> dict:
     wd = ROOT / f"{phase}-{tag}-{game}"
-    cap = action_cap(game)
     _, _, _, turns_done = snapshot_state(wd)
     max_turns = max(START_MAX_TURNS, turns_done + TURN_GROW)
     invocations = driver_retries = no_progress = 0
@@ -275,9 +232,8 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
         if state == "WIN":
             log(f"{game} [{tag}] already WIN")
             break
-        if hist >= cap:
-            log(f"{game} [{tag}] exhausted {cap} actions "
-                f"({ACTION_CAP_MULTIPLE:g}x human baseline) — handing to fallback")
+        if hist >= MAX_ACTIONS:
+            log(f"{game} [{tag}] exhausted {MAX_ACTIONS} actions")
             break
         if invocations >= MAX_INVOCATIONS:
             log(f"{game} [{tag}] giving up (invocations={invocations})")
@@ -285,7 +241,7 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
         if turns_done + 1 > max_turns:
             max_turns = min(MAX_TURNS_CAP, turns_done + TURN_GROW)
         invocations += 1
-        out = run_once(game, wd, model, effort, provider, max_turns, cap)
+        out = run_once(game, wd, model, effort, provider, max_turns)
         state, level, hist, turns_done = snapshot_state(wd)
         log(f"{game} [{tag}] inv={invocations} state={state} lvl={level} "
             f"hist={hist} turns={turns_done} max_turns={max_turns}")
@@ -293,7 +249,7 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
             raise RuntimeError(
                 f"{game}: harness live-lock contention (another runner active) — "
                 f"aborting to avoid a false-0.0 cascade; kill stray runners first")
-        if state == "WIN" or hist >= cap:
+        if state == "WIN" or hist >= MAX_ACTIONS:
             continue
         if "WATCHDOG-HANG-KILLED" in out:
             log(f"{game} [{tag}] hang watchdog fired (events quiet "

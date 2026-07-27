@@ -1,9 +1,13 @@
-"""Sweep protocol: metric-derived action caps and per-game fallback ordering.
+"""Sweep protocol: the <80 fallback must run per game, not in a second pass.
 
-RHAE squares the action-efficiency ratio, so a run far past the human baseline cannot
-reach a useful score however it finishes. The sweep must stop such a primary and hand
-the game to the <80 fallback pass — and it must do so per game, so one unrecoverable
-game cannot block every other game's fallback.
+Two sequential passes (all primaries, then all fallbacks) let one non-terminating
+primary block every other game's fallback — which is how sp80 stopped tn36 and sc25
+from ever receiving their Sol-max rerun.
+
+Note: a total-action cap was tried here and reverted. RHAE is scored per level, so a
+run that pays a large one-time discovery cost and then beats the human on later levels
+(tn36: 1501 actions on L1, then 43 and 48 vs human 55 and 62, winning 7/7) is the
+method working — and a total-action cap kills exactly that run.
 """
 from __future__ import annotations
 
@@ -14,24 +18,6 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "spikes"))
 
 import sweep  # noqa: E402
-
-
-def test_action_cap_is_two_times_human_baseline():
-    assert sweep.BASELINE["sp80"] == 518
-    assert sweep.BASELINE["tn36"] == 317
-    assert sweep.action_cap("sp80") == 1036
-    assert sweep.action_cap("tn36") == 634
-
-
-def test_action_cap_falls_back_for_unknown_game():
-    assert sweep.action_cap("zz00") == sweep.DEFAULT_ACTION_CAP
-
-
-def test_action_cap_is_far_below_our_observed_thrash():
-    # The exact runs that motivated the cap: sp80 spent 2897 actions without clearing
-    # level 1; tn36 spent 2364 (7.5x its baseline) to score 71.93.
-    assert sweep.action_cap("sp80") < 2897
-    assert sweep.action_cap("tn36") < 2364
 
 
 class _Harness:
