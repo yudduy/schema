@@ -98,6 +98,20 @@ class Verdict:
             f"recorded=({self.recorded_final_levels},{self.recorded_final_state})")
 
 
+def _environments_dir() -> Path:
+    """Resolve the local environment cache the same way Gateway does.
+
+    The arc_agi default is a CWD-relative "environment_files", so verifying from
+    anywhere but the repo root would find no games and RED every genuine trace —
+    including every helper submission arriving through intake.py.
+    """
+    configured = os.environ.get("SCHEMA_ENVIRONMENTS_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    repo = Path(__file__).resolve().parents[1] / "environment_files"
+    return repo if repo.is_dir() else Path("environment_files")
+
+
 def _open_env(game: str, offline: bool):
     """Open a game on the local engine and RESET-less-ly hand back the env.
 
@@ -106,12 +120,14 @@ def _open_env(game: str, offline: bool):
     across modes: a mode that cannot open the game raises, and the caller records
     that error rather than quietly verifying against a different engine (which would
     blame a genuine trace for a version mismatch)."""
+    environments_dir = _environments_dir()
     if offline:
         from arc_agi import OperationMode
 
-        arc = arc_agi.Arcade(operation_mode=OperationMode.OFFLINE)
+        arc = arc_agi.Arcade(operation_mode=OperationMode.OFFLINE,
+                             environments_dir=str(environments_dir))
     else:
-        arc = arc_agi.Arcade()
+        arc = arc_agi.Arcade(environments_dir=str(environments_dir))
     return arc.make(game, seed=0)
 
 
@@ -183,6 +199,7 @@ def _verify_inner(events_path, game, *, offline: bool, verbose: bool) -> Verdict
         grid_mismatches = steps_replayed = ours_level_ups = recorded_level_ups = 0
         level_divergences, state_divergences, level_up_divergences = [], [], []
         previous_level = obs.levels_completed
+        previous_state = obs.state.value
         last_frame = obs
 
         for event in actions:
@@ -204,9 +221,15 @@ def _verify_inner(events_path, game, *, offline: bool, verbose: bool) -> Verdict
                 break
 
             last_frame = frame
-            engine_level_up = frame.levels_completed > previous_level
+            # Mirror gateway.py's contract exactly: a WIN transition is a level_up
+            # even when it does not increment levels_completed. Using only the
+            # increment would false-RED a genuine trace on its final winning step.
+            engine_level_up = (frame.levels_completed > previous_level
+                               or (previous_state != "WIN"
+                                   and frame.state.value == "WIN"))
             ours_level_ups += int(engine_level_up)
             previous_level = frame.levels_completed
+            previous_state = frame.state.value
             # The scorer partitions actions into per-level counts SOLELY by the
             # level_up flag, so pin it to the engine's real increments — otherwise
             # actions could be re-attributed across levels (inflating RHAE) without

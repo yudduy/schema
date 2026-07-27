@@ -43,7 +43,10 @@ def main() -> None:
     # genuine easy-game trace, relabeled to a harder game_id, would replay green while
     # being scored against the harder baseline (a maxed score for a game never played).
     game_id = str(run.get("game_id") or "")
-    game = game_id.split("-")[0] or wd.name.rsplit("-", 1)[-1]
+    if not game_id:
+        raise SystemExit(f"REJECT: {wd} run.json has no game_id — cannot bind the "
+                         f"replay engine to the scorer's baseline")
+    game = game_id.split("-")[0]        # ledger key (short form)
     warns = []
     if driver.get("cli_version") and driver["cli_version"] != EXPECTED_CLI:
         warns.append(f"cli_version={driver['cli_version']!r} != {EXPECTED_CLI!r}")
@@ -54,7 +57,10 @@ def main() -> None:
     # The scorer trusts the events file's self-reported levels/actions. Re-execute
     # the trajectory on the ground-truth engine before trusting that score, so a
     # fabricated or edited trace cannot enter the ledger.
-    verdict = verify_events(ev, game)
+    # Replay against the FULL versioned id: arc.make() honours the version, so a
+    # trace recorded on a different build of the game cannot verify against the
+    # one currently installed.
+    verdict = verify_events(ev, game_id)
     if not verdict.green:
         raise SystemExit(f"REJECT: {wd} failed replay verification — {verdict.reason()}")
 

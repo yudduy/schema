@@ -68,22 +68,29 @@ def main() -> None:
         # reproduce byte-for-byte is quarantined: kept out of the release bundle and
         # the mean, recorded only as a rejected claim.
         game_id = str(run.get("game_id") or "")
-        verify_game = game_id.split("-")[0] or game
-        verdict = verify_events(ev, verify_game)
+        verify_game = game_id.split("-")[0]
+        # Cheap identity check first — never spend a full trajectory replay (and never
+        # report mismatch counts measured against the wrong engine) on a relabeled trace.
         if verify_game != game:
+            verdict = None
             reason = f"ledger key {game!r} != trace game_id {game_id!r} (short {verify_game!r})"
-        elif not verdict.green:
-            reason = verdict.reason()
         else:
-            reason = None
+            verdict = verify_events(ev, game_id)   # full versioned id binds the build
+            reason = None if verdict.green else verdict.reason()
         if reason is not None:
             manifest["games"][game] = {
                 "replay_verified": False,
-                "replay_grid_mismatches": verdict.grid_mismatches,
+                "replay_grid_mismatches": verdict.grid_mismatches if verdict else -1,
                 "replay_error": reason,
                 "claimed_rhae": final["rhae"],
             }
             unverified.append(game)
+            # Export is re-runnable: a game green in an earlier run may be red now.
+            # Publishing "only verified traces" means removing the stale copy too.
+            for stale in (out_traces / game, out_traces / f"{game}-primary"):
+                if stale.exists():
+                    shutil.rmtree(stale, ignore_errors=True)
+                    print(f"  removed previously published {stale.name} from the bundle")
             print(f"WARNING: {game} did NOT replay-verify — QUARANTINED (not published): {reason}")
             continue
 
