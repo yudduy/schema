@@ -17,8 +17,8 @@
 - A workdir is a durable trajectory identity: `run.json` pins its game, provider,
   model, effort, prompt, driver policy, CLI, and model catalog. Resume it with matching
   settings instead of repurposing it.
-- Deep BFS has a 600-second default budget. Use `--turn-timeout 3600` so BFS and the
-  surrounding model turn fit within the driver timeout.
+- Deep BFS runs should use `--turn-timeout 3600` so search and the surrounding model
+  turn fit within the driver timeout.
 
 ## Canonical implementation paths
 
