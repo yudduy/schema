@@ -15,6 +15,7 @@ import arc_agi
 import numpy as np
 from arcengine import GameAction
 
+from .environment_cache import resolve_environments_dir
 from .events import ActionTaken, EventLog, Grid, ModelMispredicted
 from .narration import surprise_message
 
@@ -143,15 +144,7 @@ class Gateway:
         self.game = game
         self.event_log = event_log
         if arcade is None:
-            configured_environments = os.environ.get("SCHEMA_ENVIRONMENTS_DIR")
-            repository_environments = Path(__file__).resolve().parents[1] / "environment_files"
-            environments_dir = (
-                Path(configured_environments).expanduser()
-                if configured_environments
-                else repository_environments
-                if repository_environments.is_dir()
-                else Path("environment_files")
-            )
+            environments_dir = resolve_environments_dir()
             # Prefer the deterministic local cache. Fall back to NORMAL mode so a
             # not-yet-downloaded public game can be fetched before later offline turns.
             self.arcade = arc_agi.Arcade(

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from schema_harness.events import EventLog
 from schema_harness.gateway import Gateway, WorldModelPrediction
@@ -15,6 +16,7 @@ from schema_harness.narration import (
     surprise_message,
 )
 from schema_harness.replay_verify import execute_commit, load_released_trace
+from spikes import replay_parity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +56,94 @@ class FakeArcade:
         assert game == "bp35-test"
         assert seed == 0
         return self.environment
+
+
+@pytest.mark.parametrize("cache_source", ["absolute", "home", "repository", "cwd"])
+def test_gateway_and_replay_resolve_environment_cache_identically(
+    cache_source, tmp_path, monkeypatch
+):
+    repository_environments = REPO_ROOT / "environment_files"
+    original_is_dir = Path.is_dir
+    work_cwd = tmp_path / "cwd"
+    work_cwd.mkdir()
+    monkeypatch.chdir(work_cwd)
+
+    if cache_source == "absolute":
+        expected = tmp_path / "absolute-cache"
+        monkeypatch.setenv("SCHEMA_ENVIRONMENTS_DIR", str(expected))
+    elif cache_source == "home":
+        home = tmp_path / "home"
+        home.mkdir()
+        expected = home / "configured-cache"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("SCHEMA_ENVIRONMENTS_DIR", "~/configured-cache")
+    elif cache_source == "repository":
+        expected = repository_environments
+        monkeypatch.delenv("SCHEMA_ENVIRONMENTS_DIR", raising=False)
+        monkeypatch.setattr(
+            Path,
+            "is_dir",
+            lambda path: True
+            if path == repository_environments
+            else original_is_dir(path),
+        )
+    else:
+        expected = Path("environment_files")
+        monkeypatch.delenv("SCHEMA_ENVIRONMENTS_DIR", raising=False)
+        monkeypatch.setattr(
+            Path,
+            "is_dir",
+            lambda path: False
+            if path == repository_environments
+            else original_is_dir(path),
+        )
+
+    constructed = []
+
+    class RecordingArcade:
+        def __init__(self, *, operation_mode=None, environments_dir):
+            constructed.append((operation_mode, environments_dir))
+            self.environment = FakeEnvironment()
+
+        def make(self, _game, seed):
+            assert seed == 0
+            return self.environment
+
+    monkeypatch.setattr(replay_parity.arc_agi, "Arcade", RecordingArcade)
+
+    Gateway("path-test")
+    replay_parity._open_env("path-test", offline=True)
+    replay_parity._open_env("path-test", offline=False)
+
+    assert [Path(environments_dir) for _, environments_dir in constructed] == [
+        expected,
+        expected,
+        expected,
+    ]
+
+
+def test_gateway_falls_back_online_while_replay_offline_is_fail_closed(monkeypatch):
+    constructed_modes = []
+    make_results = [None, FakeEnvironment()]
+
+    class RecordingArcade:
+        def __init__(self, *, operation_mode=None, environments_dir):
+            assert environments_dir
+            constructed_modes.append(operation_mode)
+
+        def make(self, _game, seed):
+            assert seed == 0
+            return make_results.pop(0)
+
+    monkeypatch.setattr(replay_parity.arc_agi, "Arcade", RecordingArcade)
+    Gateway("path-test")
+
+    assert constructed_modes == [replay_parity.arc_agi.OperationMode.OFFLINE, None]
+
+    constructed_modes.clear()
+    make_results.append(None)
+    assert replay_parity._open_env("path-test", offline=True) is None
+    assert constructed_modes == [replay_parity.arc_agi.OperationMode.OFFLINE]
 
 
 def test_no_world_model_executes_exactly_one_action(monkeypatch):

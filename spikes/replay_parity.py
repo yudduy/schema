@@ -15,12 +15,18 @@ without it genuine traces diverge at level boundaries.
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import arc_agi
 import numpy as np
 from arcengine import GameAction
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from schema_harness.environment_cache import resolve_environments_dir
 
 
 def load_trace(lines):
@@ -98,20 +104,6 @@ class Verdict:
             f"recorded=({self.recorded_final_levels},{self.recorded_final_state})")
 
 
-def _environments_dir() -> Path:
-    """Resolve the local environment cache the same way Gateway does.
-
-    The arc_agi default is a CWD-relative "environment_files", so verifying from
-    anywhere but the repo root would find no games and RED every genuine trace —
-    including every helper submission arriving through intake.py.
-    """
-    configured = os.environ.get("SCHEMA_ENVIRONMENTS_DIR")
-    if configured:
-        return Path(configured).expanduser()
-    repo = Path(__file__).resolve().parents[1] / "environment_files"
-    return repo if repo.is_dir() else Path("environment_files")
-
-
 def _open_env(game: str, offline: bool):
     """Open a game on the local engine and RESET-less-ly hand back the env.
 
@@ -120,7 +112,7 @@ def _open_env(game: str, offline: bool):
     across modes: a mode that cannot open the game raises, and the caller records
     that error rather than quietly verifying against a different engine (which would
     blame a genuine trace for a version mismatch)."""
-    environments_dir = _environments_dir()
+    environments_dir = resolve_environments_dir()
     if offline:
         from arc_agi import OperationMode
 
