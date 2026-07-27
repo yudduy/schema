@@ -6,7 +6,7 @@ import json
 import math
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, ClassVar, TypeAlias
@@ -174,6 +174,26 @@ EVENT_TYPES: dict[str, type[EventRecord]] = {
 }
 
 
+def iter_json_objects(
+    path: str | os.PathLike[str],
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Yield each nonblank JSON object with its physical source line number."""
+    source = Path(path)
+    with source.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{source}:{line_number}: invalid JSON") from exc
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"{source}:{line_number}: event must be an object"
+                )
+            yield line_number, payload
+
+
 class EventLog:
     """Append compact JSON events, flushing and syncing every complete line."""
 
@@ -197,22 +217,13 @@ class EventLog:
         if not self.path.exists():
             return 0
         last_seq = 0
-        with self.path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"{self.path}:{line_number}: invalid existing JSONL"
-                    ) from exc
-                seq = payload.get("seq") if isinstance(payload, dict) else None
-                if type(seq) is not int or seq <= last_seq:
-                    raise ValueError(
-                        f"{self.path}:{line_number}: existing seq is not strictly increasing"
-                    )
-                last_seq = seq
+        for line_number, payload in iter_json_objects(self.path):
+            seq = payload.get("seq")
+            if type(seq) is not int or seq <= last_seq:
+                raise ValueError(
+                    f"{self.path}:{line_number}: existing seq is not strictly increasing"
+                )
+            last_seq = seq
         return last_seq
 
     def emit(self, event: EventRecord | str, /, **payload: Any) -> dict[str, Any]:

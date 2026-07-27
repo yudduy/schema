@@ -13,7 +13,6 @@ without it genuine traces diverge at level boundaries.
 """
 
 import argparse
-import json
 import os
 import sys
 from dataclasses import dataclass, field
@@ -27,17 +26,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from schema_harness.environment_cache import resolve_environments_dir
+from schema_harness.events import iter_json_objects
 
 
-def load_trace(lines):
+def load_trace(events):
     actions, first_turn = [], None
-    for line in lines:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
+    for event in events:
         if event.get("kind") == "action_taken":
             actions.append(event)
         elif event.get("kind") == "turn_started" and first_turn is None:
@@ -165,8 +159,8 @@ def verify_events(events_path, game, *, offline: bool = True, verbose: bool = Fa
 
 def _verify_inner(events_path, game, *, offline: bool, verbose: bool) -> Verdict:
     try:
-        lines = Path(events_path).read_text(encoding="utf-8").splitlines()
-        initial_grid, actions = load_trace(lines)
+        events = (event for _, event in iter_json_objects(events_path))
+        initial_grid, actions = load_trace(events)
     except KeyboardInterrupt:
         raise
     except Exception as exc:  # a trace we cannot even parse is unverifiable => reject

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import schema_harness.events as events_module
 from schema_harness.events import (
     ActionTaken,
@@ -16,6 +18,35 @@ from schema_harness.events import (
     TurnFallback,
     TurnStarted,
 )
+
+
+def test_event_object_reader_parity(tmp_path):
+    path = tmp_path / "events.jsonl"
+    cases = [
+        (
+            '\n{"kind":"first"}\n \n{"kind":"second","value":2}\n',
+            [{"kind": "first"}, {"kind": "second", "value": 2}],
+            None,
+        ),
+        ('{"kind":"first"}\nnot-json\n{"kind":"third"}\n', None, "2: invalid JSON"),
+        ('{"kind":"first"}\n{\n', None, "2: invalid JSON"),
+        ('{"kind":"first"}\n42\n', None, "2: event must be an object"),
+    ]
+
+    for raw, expected, error_suffix in cases:
+        path.write_text(raw, encoding="utf-8")
+        try:
+            outcome = (
+                "value",
+                [event for _, event in events_module.iter_json_objects(path)],
+            )
+        except ValueError as exc:
+            outcome = ("error", str(exc))
+
+        if error_suffix is None:
+            assert outcome == ("value", expected)
+        else:
+            assert outcome == ("error", f"{path}:{error_suffix}")
 
 
 def test_event_log_emits_released_schema_monotonic_seq_and_fsync(tmp_path, monkeypatch):

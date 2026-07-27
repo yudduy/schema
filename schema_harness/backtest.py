@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .events import Grid
+from .events import Grid, iter_json_objects
 from .model_loader import call_init_state, call_predict, set_current_level
 
 
@@ -114,25 +113,9 @@ class _Selection:
     scope: str
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
-            if not isinstance(event, dict):
-                raise ValueError(f"{path}:{line_number}: event must be an object")
-            events.append(event)
-    return events
-
-
 def _timeline_source(timeline: Any) -> tuple[list[Any], Mapping[str, Any] | None]:
     if isinstance(timeline, (str, PathLike, Path)):
-        return _read_jsonl(Path(timeline)), None
+        return [event for _, event in iter_json_objects(Path(timeline))], None
     initial = getattr(timeline, "initial_turn", None)
     actions = getattr(timeline, "actions", None)
     if actions is not None:

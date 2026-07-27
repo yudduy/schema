@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .events import EventLog, RunFinished, RunStarted, TurnCommitted, TurnStarted
+from .events import (
+    EventLog,
+    RunFinished,
+    RunStarted,
+    TurnCommitted,
+    TurnStarted,
+    iter_json_objects,
+)
 from .game_identity import short_game_id
 from .gateway import Gateway, QueuedAction, Transition
 
@@ -67,22 +74,6 @@ class FakeClock:
         return current
 
 
-def _load_events(path: Path) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
-            if not isinstance(event, dict):
-                raise ValueError(f"{path}:{line_number}: event must be an object")
-            events.append(event)
-    return events
-
-
 def _one_event(events: Iterable[dict[str, Any]], kind: str) -> dict[str, Any]:
     matches = [event for event in events if event.get("kind") == kind]
     if len(matches) != 1:
@@ -126,7 +117,7 @@ def load_released_trace(path: str | Path) -> ReleasedTrace:
     """Load committed plans and validate their released execution prefixes."""
 
     source = Path(path)
-    events = _load_events(source)
+    events = [event for _, event in iter_json_objects(source)]
     run_started = _one_event(events, "run_started")
     run_finished = _one_event(events, "run_finished")
     turn_starts = [event for event in events if event.get("kind") == "turn_started"]

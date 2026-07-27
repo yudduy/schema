@@ -34,6 +34,7 @@ from .events import (
     TurnFallback,
     TurnStarted,
     TurnTelemetry,
+    iter_json_objects,
 )
 from .game_identity import canonical_game_id as _canonical_game_id
 from .game_identity import short_game_id
@@ -589,11 +590,8 @@ def next_turn_number(workdir: str | os.PathLike[str]) -> int:
     seen: list[int] = []
     events_path = root / "events.jsonl"
     if events_path.exists():
-        for line in events_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            turn = event.get("turn") if isinstance(event, dict) else None
+        for _, event in iter_json_objects(events_path):
+            turn = event.get("turn")
             if type(turn) is int:
                 seen.append(turn)
     ledger_path = root / "runtime" / PersistentGateway.LEDGER_NAME
@@ -711,18 +709,16 @@ def _has_prior_run_events(workdir: Path) -> bool:
     events = workdir / "events.jsonl"
     if not events.is_file():
         return False
-    for line in events.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        if isinstance(record, dict) and record.get("kind") in {
+    has_prior = False
+    for _, record in iter_json_objects(events):
+        if record.get("kind") in {
             "run_started",
             "turn_started",
             "turn_telemetry",
             "run_finished",
         }:
-            return True
-    return False
+            has_prior = True
+    return has_prior
 
 
 def _turn_started(
@@ -1683,12 +1679,7 @@ def _historical_driver_totals(
     events = workdir / "events.jsonl"
     if not events.is_file():
         return costs, tokens, 0, session_usage
-    for line in events.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        if not isinstance(record, dict):
-            continue
+    for _, record in iter_json_objects(events):
         if record.get("kind") == "turn_started" and type(record.get("turn")) is int:
             turns.add(record["turn"])
         if record.get("kind") != "turn_telemetry":
@@ -1726,11 +1717,8 @@ def _historical_no_progress(workdir: Path, snapshot: GatewaySnapshot) -> int:
     events = workdir / "events.jsonl"
     if not events.is_file():
         return 0
-    for line in events.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        if not isinstance(record, dict) or record.get("kind") != "turn_started":
+    for _, record in iter_json_objects(events):
+        if record.get("kind") != "turn_started":
             continue
         level = record.get("level")
         history_len = record.get("env_step")

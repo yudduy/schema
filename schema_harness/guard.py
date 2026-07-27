@@ -9,6 +9,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .events import iter_json_objects
+
 # System roots the interpreter genuinely needs to read to run + import the stdlib.
 _SYSTEM_PREFIXES = ("/usr/", "/System/", "/Library/", "/opt/homebrew/",
                     "/private/var/folders/", "/private/var/db/", "/dev/null", "/dev/urandom")
@@ -189,11 +191,7 @@ def audit_events(events_path: str | Path, repo: str | Path) -> dict:
     repo_real = os.path.realpath(str(repo))
     violations: list[dict] = []
     tokens = _LEAK_TOKENS + (repo_real,)
-    for line in Path(events_path).read_text().splitlines():
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for _, e in iter_json_objects(events_path):
         if e.get("kind") != "tool_started":
             continue
         name = str(e.get("name", "")).split("__")[-1]

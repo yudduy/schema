@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from schema_harness.guard import (
     audit_events,
     sandbox_exec_argv,
@@ -128,3 +130,15 @@ def test_audit_events_flags_leak(tmp_path):
     result = audit_events(events, REPO)
     assert not result["clean"]
     assert result["violations"][0]["seq"] == 2
+
+
+def test_audit_events_is_unclean_on_malformed_json(tmp_path):
+    events = tmp_path / "events.jsonl"
+    events.write_text(
+        '{"kind":"tool_started","seq":1,"name":"read_file","args":{}}\n'
+        "not-json\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=rf"{events}:2: invalid JSON"):
+        audit_events(events, REPO)
