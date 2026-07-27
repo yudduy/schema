@@ -34,7 +34,7 @@ GAMES = [
     "sp80", "su15", "tn36", "tr87", "tu93", "vc33", "wa30",
 ]
 
-# Contamination split (see REPRODUCE.md): CLEAN = never blog-spoiled and never used
+# Contamination split (see README.md): CLEAN = never blog-spoiled and never used
 # in tuning; CONTAMINATED = blog-discussed mechanics/trace mentions, or a dev game.
 # 2026-07-20 re-audit against the FULL blog text (earlier fetches missed the expandable
 # case studies): re86/ka59/dc22/lf52/sb26 have detailed mechanism case studies in the

@@ -1,68 +1,151 @@
-# Schema — open reconstruction of the ARC-AGI-3 harness
+# Schema — an open reconstruction of the ARC-AGI-3 harness
 
-An independent, clean-room reconstruction of **Schema**
-([schema-harness.github.io](https://schema-harness.github.io/), Impossible Research) —
-the harness that has frontier models play ARC-AGI-3 like physicists: write each game's
-mechanism as an executable program, validate it against every recorded transition, plan
-inside it, and act only through a gated commit channel. The original method was reported
-with a closed harness (98.98% RHAE with Opus 4.8 + Fable 5; 95.35% with GPT-5.6 Sol);
-only its traces were released. This repo rebuilds the harness from those released
-artifacts and reproduces the reported behavior on live play, with every claim checkable
-from committed code and emitted traces. Credit for the method belongs to Impossible
-Research; this is a reproduction, not their code.
+Schema is an independent, clean-room reconstruction of Impossible Research's
+[Schema harness](https://schema-harness.github.io/). It has frontier models approach
+ARC-AGI-3 games like physicists: describe the game's mechanism as an executable world
+model, validate that model against recorded transitions, plan inside it, and act only
+through a gated commit channel.
 
-**Status (2026-07-21, sweep in progress):** 7 of 25 public games scored with GPT-5.6 Sol —
-five at 100.0 (ar25 8/8, r11l 6/6, tu93 9/9, cd82 6/6, su15 9/9), tn36 71.93 (7/7) and
-sc25 61.44 (6/6) pending their protocol fallback reruns. Zero DNFs so far. Live numbers
-live in the sweep manifest (`spikes/export_traces.py`), not in this README.
+The original harness was closed; its traces were released. This repository rebuilds the
+protocol, tool-result interface, and world-model contract from those artifacts without
+using game solutions. Credit for the method and released traces belongs to Impossible
+Research. This is a reproduction, not their code.
 
-## Run one game yourself
+## Current result
 
-See [REPRODUCE.md](REPRODUCE.md) for the full evidence chain (vendored official scorer,
-replay parity against the released bp35 trace, honesty notes on contamination and
-self-reporting). Short version:
+Current status: 8 of 11 held-out ("clean") games scored, mean 90.78% RHAE, primary
+run only, no <80 fallback pass completed yet; 3 games outstanding (sp80, s5i5, cn04),
+and sp80 is currently failing.
+
+That is a partial clean-set result, not a full benchmark result and not a completed
+pass@2-style protocol result. Do not cite it as a headline "~90%" without those
+caveats.
+
+## Evidence chain
+
+Every accepted result has four independently inspectable layers:
+
+1. **Harness:** the repository commit used for the run. Stock OpenAI Codex or Claude
+   Code runs headlessly against the `locus` MCP server and cannot read game source.
+2. **Trace:** the workdir contains the append-only `events.jsonl`, configuration and
+   pinned driver metadata in `run.json`, the agent's notes and world-model versions,
+   and raw per-turn sessions.
+3. **Score:** `vendor/score_trajectories.py` and `vendor/baseline_actions.csv` compute
+   Regret-Human-Action-Efficiency (RHAE) from the released scoring procedure and human
+   action baselines.
+4. **Replay verification:** `spikes/replay_parity.py` re-executes every recorded action
+   on the ground-truth engine and requires the initial frame, every settled grid,
+   running level and state, every `level_up`, and the final outcome to match.
+
+`spikes/intake.py` applies the scorer and replay gate to contributed workdirs.
+`spikes/export_traces.py` publishes and averages only replay-verified traces; failed
+verification is quarantined rather than included in the bundle or mean. The trace's
+full versioned game ID is bound to both replay and scoring, preventing a trace from
+being relabeled against another game's baseline.
+
+## Setup
+
+Live game runs require:
+
+- macOS, because the deny-by-default agent sandbox uses `sandbox-exec`
+- Python 3.12 and [uv](https://docs.astral.sh/uv/)
+- Node.js 22 or newer
+- a ChatGPT subscription for Codex quota
+- an ARC-AGI-3 API key
 
 ```bash
-uv sync && npm install -g @openai/codex@0.144.1 && codex login
-cp .env.example .env      # paste your ARC key
-ONLY_RESET_LEVELS=true uv run python spikes/sweep.py sol tu93
+git clone https://github.com/yudduy/schema
+cd schema
+uv sync
+npm install -g @openai/codex@0.144.1
+codex login
+cp .env.example .env
 ```
 
-## Help run the sweep
+Edit `.env` and set `ARC_API_KEY`. The Codex CLI is pinned to exactly `0.144.1`;
+the runner refuses other versions.
 
-The bottleneck is subscription quota, not machines — see [HELPER.md](HELPER.md) to claim
-a game and contribute a verified datapoint.
+Games can only be RUN on macOS (the agent sandbox uses sandbox-exec and fails closed
+elsewhere); traces can be verified/scored anywhere.
 
-## Layout
+## Basic usage
 
-- `schema_harness/` — runner (Claude/Codex headless drivers), `locus` MCP server
-  (14 tools: commit_actions, run_backtest, run_bfs, …), world-model worker, BFS, backtest
-- `vendor/` — official trajectory scorer + human baselines + released bp35 trace
-- `prompts/` — the physicist method prompts (`physicist_v9_matched_transfer.md` is live)
-- `spikes/` — sweep orchestration, trace export, intake verification
-- `docs/` — lane charters, results ledgers, consolidation history
-
----
-
-## The underlying ARC-AGI-3 environment
-
-[ARC-AGI-3](https://arcprize.org/arc-agi/3) interactive-reasoning environments via the
-official [ARC-AGI Toolkit](https://github.com/arcprize/arc-agi). Games execute on the
-local engine (~2K FPS, no rate limits); the API supplies game files, scorecards, replays.
+Exercise the ARC environment directly:
 
 ```bash
-uv run play.py                            # quickstart: LS20 rendered in the terminal
-uv run agent.py --game vc33 --render      # random agent, watch it play
+uv run play.py
+uv run agent.py --game vc33 --render
 ```
 
-- `arc_agi.Arcade()` — client. Reads `ARC_API_KEY` from env/`.env`, else fetches an
-  anonymous key. Downloads game files to `environment_files/` on first use, then runs
-  them locally. `operation_mode=OperationMode.OFFLINE` skips the API entirely.
-- `env = arc.make(game_id, seed=0, render_mode=None)` — `"terminal"` to watch.
-- `frame = env.step(action, data=None)` → `.frame` (64×64 grids, colors 0–15), `.state`
-  (`NOT_FINISHED`/`WIN`/`GAME_OVER`), `.levels_completed`, `.available_actions`.
-- Actions: `GameAction.ACTION1–5,7` simple; `ACTION6` takes `data={"x": .., "y": ..}`;
-  `RESET` starts/restarts. `arc.get_scorecard()` — score, levels, action/reset counts.
+Run one game through the canonical Sol sweep protocol:
 
-Docs: <https://docs.arcprize.org> · Games: <https://arcprize.org/tasks> · Agent
-templates: <https://docs.arcprize.org/llm_agents>
+```bash
+ONLY_RESET_LEVELS=true caffeinate -is uv run python spikes/sweep.py sol <game>
+```
+
+`ONLY_RESET_LEVELS=true` is mandatory for live runs (the runner refuses without it).
+The command performs the xhigh primary run, grows budgets when necessary, scores the
+trace, and runs the Sol-max fallback if the primary score is below 80. It is resumable:
+after an interruption, run the same command again. Progress is written to
+`~/schema-sweep/progress.log`, and durable workdirs live under `~/schema-sweep/`.
+
+A direct runner invocation is useful for controlled experiments. Keep its workdir
+outside the repository:
+
+```bash
+ONLY_RESET_LEVELS=true uv run python -m schema_harness.runner \
+  --provider codex --model gpt-5.6-sol --effort xhigh --game tu93 \
+  --max-turns 80 --max-actions 3000 --turn-timeout 3600 \
+  --no-progress-turns 8 --turn-token-cap 20000000 --run-token-cap 0 \
+  --workdir /tmp/repro-tu93
+```
+
+Re-running the same command with the same workdir resumes its durable game and driver
+state. Raise `--max-turns` if a long run exhausts its turn budget.
+
+## Contribute one game run
+
+One hard game can take 2–8 hours or longer and consume substantial subscription quota.
+
+1. Open a GitHub issue titled `claim: <game>` so two contributors do not spend quota
+   on the same game. Ask which games remain open if needed.
+2. Run the one-command sweep invocation above. Use only one live game per machine.
+   Network failures back off and retry; quota exhaustion idles until the window resets.
+3. Do not edit anything in the workdir. Package every workdir for that game:
+
+   ```bash
+   cd ~/schema-sweep
+   tar -czf <game>.tgz sol-*-<game>
+   ```
+
+4. Attach `<game>.tgz` to the claim issue. Central intake replays and re-scores the
+   result, records the `events.jsonl` SHA-256, and checks the model, effort, CLI, and
+   catalog pins in `run.json`.
+
+Integrity rules are load-bearing: never change the pinned CLI during a run, never
+bypass the single-live-run lock, never edit sweep workdirs, never look up a solution or
+hint the agent, and always retain `ONLY_RESET_LEVELS=true`.
+
+## What the numbers do and do not claim
+
+Results are self-reported on the ARC-AGI-3 public set and re-verified locally by
+re-executing every trace on the ground-truth engine; they are NOT ARC Prize verified.
+
+The honest replication split treats 11 games as held out from harness and prompt
+design: `cd82`, `cn04`, `lp85`, `s5i5`, `sc25`, `sp80`, `su15`, `tn36`, `tr87`,
+`vc33`, and `tu93`. The other 14 public games are not clean replication evidence:
+the source material discussed or mentioned 12 of them, `bp35` is the replay-parity
+development game, and `r11l` was used during design iteration. Full-public-set and
+clean-set means must therefore be reported separately.
+
+Replay verification proves that the recorded actions produced the claimed grids,
+levels, state transitions, and final state. It does not prove that a trace is complete:
+removing an engine-inert no-op can leave every later frame identical. Consequently,
+per-level action counts—and therefore RHAE—are pinned only up to inert no-ops.
+Repository runs are not pruned; independent leaderboard submissions would still
+benefit from spot reruns.
+
+The public set was known in advance, and a fallback retains the better of two attempts.
+Those limitations apply even when every trace is open. Report whether a result is
+primary-only or includes the `<80` fallback pass, along with the number and identity of
+games scored.
