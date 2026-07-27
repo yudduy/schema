@@ -18,6 +18,7 @@ from arcengine import GameAction
 from .environment_cache import resolve_environments_dir
 from .events import ActionTaken, EventLog, Grid, ModelMispredicted
 from .narration import surprise_message
+from .persistence import atomic_json
 
 
 HaltReason: TypeAlias = Literal[
@@ -521,17 +522,6 @@ def grid_hash(grid: Grid) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as handle:
-        json.dump(payload, handle, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-
-
 def _execution_payload(result: ExecutionResult) -> dict[str, Any]:
     return {
         "committed": result.committed,
@@ -643,7 +633,7 @@ class PersistentGateway:
         return raw
 
     def _save_ledger(self) -> None:
-        _atomic_json(self.ledger_path, self._ledger)
+        atomic_json(self.ledger_path, self._ledger)
 
     def _timeline_records(self) -> list[dict[str, Any]]:
         if not self.timeline_path.exists():
@@ -681,7 +671,7 @@ class PersistentGateway:
             initial_grid_hash=grid_hash(self.gateway.initial_grid),
             grid_hash=grid_hash(self.gateway.grid),
         )
-        _atomic_json(self.state_path, payload)
+        atomic_json(self.state_path, payload)
 
     def _append_transitions(
         self,
@@ -881,7 +871,7 @@ class PersistentGateway:
             raise ValueError("live world model must be a workdir world_model_v<N>.py file")
         if not model.is_file():
             raise FileNotFoundError(model)
-        _atomic_json(self.model_path, {"version": 1, "path": model.name})
+        atomic_json(self.model_path, {"version": 1, "path": model.name})
 
     def live_model_path(self) -> Path | None:
         if self.model_path.exists():

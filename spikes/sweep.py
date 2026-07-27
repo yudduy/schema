@@ -27,6 +27,7 @@ LEDGER = ROOT / "ledger.json"
 PROGRESS = ROOT / "progress.log"
 
 sys.path.insert(0, str(REPO))
+from schema_harness.persistence import atomic_json  # noqa: E402
 from schema_harness.scoring import (  # noqa: E402
     VendoredScorerError,
     score_workdir,
@@ -94,9 +95,7 @@ def load_ledger() -> dict:
 
 
 def save_ledger(ledger: dict) -> None:
-    tmp = LEDGER.with_suffix(".tmp")
-    tmp.write_text(json.dumps(ledger, indent=2))
-    tmp.replace(LEDGER)
+    atomic_json(LEDGER, ledger, pretty=True)
 
 
 def snapshot_state(wd: Path):
@@ -133,7 +132,7 @@ def reconcile_budget(wd: Path, max_turns: int) -> None:
     if drv:
         drv["max_turns"] = max_turns
         drv["turn_token_cap"] = TURN_TOKEN_CAP
-        rj.write_text(json.dumps(d, indent=2))
+        atomic_json(rj, d, pretty=True)
 
 
 WATCHDOG_GRACE = 900  # events.jsonl quiet for TURN_TIMEOUT+this => hung driver, kill group

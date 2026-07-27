@@ -41,6 +41,7 @@ from .game_identity import short_game_id
 from .gateway import ExecutionResult, GatewaySnapshot, PersistentGateway
 from .locus import LocusService
 from .narration import commit_result_narration, world_model_line
+from .persistence import atomic_json
 from .scoring import VendoredScorerError, score_workdir
 
 
@@ -320,17 +321,6 @@ def build_turn_message(
     )
 
 
-def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as handle:
-        json.dump(payload, handle, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-
-
 def _atomic_text(path: Path, value: str) -> None:
     parent = path.parent
     if os.path.lexists(parent) and (parent.is_symlink() or not parent.is_dir()):
@@ -432,7 +422,7 @@ def initialize_workdir(
         config.mkdir(parents=True, exist_ok=True)
         settings = config / "settings.json"
         if not settings.exists():
-            _atomic_json(settings, {"autoCompactEnabled": False})
+            atomic_json(settings, {"autoCompactEnabled": False})
         account_marker = Path.home() / ".claude.json"
         isolated_marker = config / ".claude.json"
         if account_marker.exists() and not isolated_marker.exists():
@@ -465,7 +455,7 @@ def initialize_workdir(
         "experimental_tooling": experimental_tooling,
     }
     if not run_path.exists():
-        _atomic_json(run_path, metadata)
+        atomic_json(run_path, metadata)
     initial_turn = next_turn_number(root)
     write_mcp_config(
         root,
@@ -635,7 +625,7 @@ def write_mcp_config(
         }
     }
     path = workdir / "mcp.json"
-    _atomic_json(path, config)
+    atomic_json(path, config)
     return path
 
 
@@ -1132,7 +1122,7 @@ def _prepare_codex_catalog(
         selected["multi_agent_version"] = None
         selected["tool_mode"] = None
         selected["experimental_supported_tools"] = []
-        _atomic_json(path, payload)
+        atomic_json(path, payload)
         path.chmod(0o444)
 
     matches = [entry for entry in payload.get("models", []) if entry.get("slug") == model]
@@ -1206,7 +1196,7 @@ def _record_codex_metadata(
         raise ValueError("workdir was created with different Codex driver metadata")
     if existing is None:
         payload["driver"] = driver
-        _atomic_json(path, payload)
+        atomic_json(path, payload)
 
 
 def _codex_environment(codex_home: Path) -> dict[str, str]:
@@ -2012,7 +2002,7 @@ def _run_live(args: argparse.Namespace) -> int:
 
         if session_id and not result_is_error:
             sessions = workdir / "sessions" / "sessions.json"
-            _atomic_json(
+            atomic_json(
                 sessions,
                 {
                     "cwd": str(workdir),
@@ -2025,7 +2015,7 @@ def _run_live(args: argparse.Namespace) -> int:
 
         if result_is_error:
             if args.provider == "codex":
-                _atomic_json(
+                atomic_json(
                     workdir / "sessions" / "sessions.json",
                     {
                         "cwd": str(workdir),

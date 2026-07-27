@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from schema_harness.game_identity import short_game_id  # noqa: E402
+from schema_harness.persistence import atomic_json  # noqa: E402
 from schema_harness.scoring import (  # noqa: E402
     VendoredScorerError,
     score_workdir,
@@ -91,9 +92,12 @@ def main() -> None:
         print(f"WARN: {w}")
 
     if merge_phase:
-        from sweep import load_ledger, save_ledger
-
-        ledger = load_ledger()
+        ledger_path = Path.home() / "schema-sweep" / "ledger.json"
+        ledger = (
+            json.loads(ledger_path.read_text())
+            if ledger_path.exists()
+            else {}
+        )
         g = ledger.setdefault(merge_phase, {}).setdefault(game, {})
         prev = (g.get("final") or {}).get("rhae", -1)
         if prev >= res["rhae"]:
@@ -104,7 +108,7 @@ def main() -> None:
         g["primary_done"] = True
         if res["rhae"] >= 80:
             g["final"] = rec
-        save_ledger(ledger)
+        atomic_json(ledger_path, ledger, pretty=True)
         print(f"MERGED into ledger[{merge_phase}][{game}]"
               + ("" if res["rhae"] >= 80 else " (final pending fallback)"))
 
