@@ -12,8 +12,6 @@ Usage:  ONLY_RESET_LEVELS=true uv run python spikes/sweep.py <phase>
 """
 import json
 import os
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +25,12 @@ ROOT = Path.home() / "schema-sweep"
 ROOT.mkdir(exist_ok=True)
 LEDGER = ROOT / "ledger.json"
 PROGRESS = ROOT / "progress.log"
+
+sys.path.insert(0, str(REPO))
+from schema_harness.scoring import (  # noqa: E402
+    VendoredScorerError,
+    score_workdir,
+)
 
 GAMES = [
     "ar25", "bp35", "cd82", "cn04", "dc22", "ft09", "g50t", "ka59", "lf52",
@@ -190,38 +194,6 @@ def run_once(game, wd, model, effort, provider, max_turns) -> str:
     return out
 
 
-def score_game(wd: Path) -> dict:
-    """Run the vendored scorer; return {rhae, state, levels, workdir}."""
-    scorer = REPO / "vendor" / "score_trajectories.py"
-    baseline = REPO / "vendor" / "baseline_actions.csv"
-    if not (wd / "events.jsonl").exists() or not (wd / "run.json").exists():
-        return {"rhae": 0.0, "state": "NO_RUN", "levels": "0/0", "workdir": str(wd)}
-    with tempfile.TemporaryDirectory(prefix="sweep-score-") as tmp:
-        root = Path(tmp)
-        shutil.copy2(baseline, root / "baseline_actions.csv")
-        for ds in ("gpt_5_6_sol", "claude_fable_opus"):
-            traj = root / ds / wd.name
-            traj.mkdir(parents=True)
-            shutil.copy2(wd / "events.jsonl", traj / "events.jsonl")
-            shutil.copy2(wd / "run.json", traj / "run.json")
-        r = subprocess.run(
-            [sys.executable, str(scorer), "--root", str(root),
-             "--expected", "0", "--no-manifest-check", "--compact"],
-            capture_output=True, text=True,
-        )
-    out = r.stdout + r.stderr
-    m = re.search(
-        r"\|\s*\d+\s*\|\s*\w+\s*\|\s*\w+\s*\|[^|]*\|[^|]*\|\s*(\w+)\s*\|"
-        r"\s*(\d+/\d+)\s*\|\s*\d+\s*\|\s*([\d.]+)%\s*\|",
-        out,
-    )
-    if not m:
-        return {"rhae": 0.0, "state": "SCORE_FAIL", "levels": "0/0",
-                "workdir": str(wd), "raw": out[-400:]}
-    return {"rhae": float(m.group(3)), "state": m.group(1),
-            "levels": m.group(2), "workdir": str(wd)}
-
-
 def run_game(phase, game, model, effort, provider, tag) -> dict:
     wd = ROOT / f"{phase}-{tag}-{game}"
     _, _, _, turns_done = snapshot_state(wd)
@@ -294,11 +266,19 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
             continue
         log(f"{game} [{tag}] unknown stop; tail: {out[-250:]}")
         break
-    res = score_game(wd)
-    if res["state"] in ("NO_RUN", "SCORE_FAIL"):
+    try:
+        score = score_workdir(wd)
+    except VendoredScorerError as exc:
         raise RuntimeError(
-            f"{game}: no scorable run produced (state={res['state']}) — aborting "
-            f"instead of recording a false 0.0 (env problem, not a game result)")
+            f"{game}: no scorable run produced — aborting instead of recording "
+            f"a false 0.0 (env problem, not a game result): {exc}"
+        ) from exc
+    res = {
+        "rhae": score.rhae,
+        "state": score.state,
+        "levels": score.levels,
+        "workdir": str(wd),
+    }
     log(f"{game} [{tag}] SCORED rhae={res['rhae']} state={res['state']} "
         f"levels={res['levels']}")
     return res
@@ -385,7 +365,17 @@ def selftest() -> None:
     for wd in [Path("/private/tmp/schema-val-xhigh-r11l-1784536776"),
                Path("/private/tmp/schema-val-xhigh-tu93-1784554148")]:
         if wd.exists():
-            print(wd.name, "->", score_game(wd))
+            score = score_workdir(wd)
+            print(
+                wd.name,
+                "->",
+                {
+                    "rhae": score.rhae,
+                    "state": score.state,
+                    "levels": score.levels,
+                    "workdir": str(wd),
+                },
+            )
         else:
             print(wd.name, "-> (missing)")
 

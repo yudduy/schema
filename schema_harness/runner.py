@@ -41,6 +41,7 @@ from .game_identity import short_game_id
 from .gateway import ExecutionResult, GatewaySnapshot, PersistentGateway
 from .locus import LocusService
 from .narration import commit_result_narration, world_model_line
+from .scoring import VendoredScorerError, score_workdir
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -778,39 +779,6 @@ class ScriptedAgent:
         return "Stub agent committed one deterministic legal action."
 
 
-def _validate_with_vendored_scorer(workdir: Path) -> str:
-    scorer = REPO_ROOT / "vendor" / "score_trajectories.py"
-    baseline = REPO_ROOT / "vendor" / "baseline_actions.csv"
-    with tempfile.TemporaryDirectory(prefix="schema-dry-scorer-") as temporary:
-        root = Path(temporary)
-        shutil.copy2(baseline, root / "baseline_actions.csv")
-        for dataset in ("gpt_5_6_sol", "claude_fable_opus"):
-            trajectory = root / dataset / "stub_max_bp35_dry"
-            trajectory.mkdir(parents=True)
-            shutil.copy2(workdir / "events.jsonl", trajectory / "events.jsonl")
-            shutil.copy2(workdir / "run.json", trajectory / "run.json")
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(scorer),
-                "--root",
-                str(root),
-                "--expected",
-                "0",
-                "--no-manifest-check",
-                "--compact",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"vendored scorer rejected dry-run events: {completed.stderr.strip()}"
-            )
-        return completed.stdout
-
-
 def run_dry(args: argparse.Namespace) -> int:
     provider = "stub"
     workdir, snapshot = initialize_workdir(
@@ -863,11 +831,21 @@ def run_dry(args: argparse.Namespace) -> int:
         )
     final_snapshot = load_snapshot(workdir)
     _finish_run(workdir, final_snapshot, start_history_len=start_history_len)
-    scorer_output = _validate_with_vendored_scorer(workdir)
+    try:
+        score = score_workdir(
+            workdir,
+            compact=True,
+            trajectory_name="stub_max_bp35_dry",
+        )
+    except VendoredScorerError as exc:
+        detail = exc.stderr.strip() or str(exc)
+        raise RuntimeError(
+            f"vendored scorer rejected dry-run events: {detail}"
+        ) from exc
     print(f"Dry run complete: {workdir}")
     print(f"events: {workdir / 'events.jsonl'}")
     print("Vendored scorer: accepted")
-    for line in scorer_output.splitlines():
+    for line in score.stdout.splitlines():
         if "BP35" in line.upper():
             print(line)
             break

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
-import subprocess
-import sys
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -24,6 +21,7 @@ from .events import (
 )
 from .game_identity import short_game_id
 from .gateway import Gateway, QueuedAction, Transition
+from .scoring import VendoredScorerError, score_workdir
 
 
 RELEASE_COLLECTIONS = ("gpt_5_6_sol", "claude_fable_opus")
@@ -262,66 +260,6 @@ def _prepare_output(
     return trajectory_dir
 
 
-def _assert_scorer_acceptance(
-    scorer: Path,
-    output_root: Path,
-    *,
-    expected_score: float,
-    expected_levels: int,
-) -> str:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(scorer),
-            "--root",
-            str(output_root),
-            "--expected",
-            "0",
-            "--no-manifest-check",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise AssertionError(
-            f"vendored scorer failed with exit {completed.returncode}: {completed.stderr.strip()}"
-        )
-    score_text = f"{expected_score:.2f}%"
-    levels_text = f"{expected_levels}/{expected_levels}"
-    bp35_rows = [
-        line
-        for line in completed.stdout.splitlines()
-        if re.search(r"\|\s*BP35\s*\|", line)
-    ]
-    if not bp35_rows or any(
-        score_text not in row or levels_text not in row for row in bp35_rows
-    ):
-        raise AssertionError(
-            f"vendored scorer did not report bp35 {score_text} and {levels_text}:\n"
-            f"{completed.stdout}"
-        )
-    return completed.stdout
-
-
-def _mirror_for_two_collection_scorer(
-    trajectory_dir: Path,
-    output_root: Path,
-    *,
-    collection: str,
-) -> Path:
-    """Populate the scorer's other mandatory collection with the same bp35 replay."""
-
-    companion = next(name for name in RELEASE_COLLECTIONS if name != collection)
-    mirror = output_root / companion / trajectory_dir.name
-    if mirror.exists():
-        raise FileExistsError(f"refusing to replace scorer mirror {mirror}")
-    mirror.mkdir(parents=True)
-    for filename in ("events.jsonl", "run.json"):
-        shutil.copyfile(trajectory_dir / filename, mirror / filename)
-    return mirror
-
-
 def replay_and_verify(
     released_events: str | Path,
     output_root: str | Path,
@@ -443,27 +381,27 @@ def replay_and_verify(
         encoding="utf-8",
     )
 
-    # The vendored scorer always summarizes both released collections and divides
-    # by each collection's trajectory count. Mirror this bp35 replay so neither
-    # hard-coded collection is empty; no non-bp35 trajectory is introduced.
-    scorer_mirror = _mirror_for_two_collection_scorer(
-        trajectory_dir,
-        output,
-        collection=collection,
-    )
     try:
-        scorer_stdout = _assert_scorer_acceptance(
-            scorer,
-            output,
-            expected_score=expected_score,
-            expected_levels=expected_levels,
+        score = score_workdir(
+            trajectory_dir,
+            scorer_path=scorer,
+            baseline_path=baseline,
         )
-    finally:
-        shutil.rmtree(scorer_mirror)
+    except VendoredScorerError as exc:
+        raise AssertionError(str(exc)) from exc
+    if (
+        score.rhae != expected_score
+        or score.levels_cleared != expected_levels
+        or score.total_levels != expected_levels
+    ):
+        raise AssertionError(
+            f"vendored scorer did not report bp35 {expected_score:.2f}% and "
+            f"{expected_levels}/{expected_levels}:\n{score.stdout}"
+        )
     return ReplayVerification(
         events_path=events_path,
         run_path=run_path,
-        scorer_stdout=scorer_stdout,
+        scorer_stdout=score.stdout,
         action_count=len(gateway.timeline),
         levels=gateway.level,
         score=expected_score,

@@ -18,7 +18,10 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from schema_harness.game_identity import short_game_id  # noqa: E402
-from sweep import score_game, load_ledger, save_ledger  # noqa: E402
+from schema_harness.scoring import (  # noqa: E402
+    VendoredScorerError,
+    score_workdir,
+)
 from replay_parity import verify_events  # noqa: E402
 
 EXPECTED_CLI = "codex-cli 0.144.1"
@@ -56,9 +59,16 @@ def main() -> None:
     warns = []
     if driver.get("cli_version") and driver["cli_version"] != EXPECTED_CLI:
         warns.append(f"cli_version={driver['cli_version']!r} != {EXPECTED_CLI!r}")
-    res = score_game(wd)
-    if res["state"] in ("NO_RUN", "SCORE_FAIL"):
-        raise SystemExit(f"REJECT: scorer failed on {wd}: {res}")
+    try:
+        score = score_workdir(wd)
+    except VendoredScorerError as exc:
+        raise SystemExit(f"REJECT: scorer failed on {wd}: {exc}") from None
+    res = {
+        "rhae": score.rhae,
+        "state": score.state,
+        "levels": score.levels,
+        "workdir": str(wd),
+    }
 
     # The scorer trusts the events file's self-reported levels/actions. Re-execute
     # the trajectory on the ground-truth engine before trusting that score, so a
@@ -81,6 +91,8 @@ def main() -> None:
         print(f"WARN: {w}")
 
     if merge_phase:
+        from sweep import load_ledger, save_ledger
+
         ledger = load_ledger()
         g = ledger.setdefault(merge_phase, {}).setdefault(game, {})
         prev = (g.get("final") or {}).get("rhae", -1)
