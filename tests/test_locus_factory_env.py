@@ -24,5 +24,5 @@ def test_locus_factory_invalid_timeout_values_fall_back_to_defaults(
     service = locus._service()
 
     assert service.process_timeout == 30
-    assert service.bfs_timeout == 60
+    assert service.bfs_timeout == 300
     assert service.backtest_timeout == 120

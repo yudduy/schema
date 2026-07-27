@@ -246,7 +246,7 @@ class LocusService:
         gateway: PersistentGateway | None = None,
         arcade: Any | None = None,
         process_timeout: float = 30,
-        bfs_timeout: float = 60,
+        bfs_timeout: float = 300,
         backtest_timeout: float = 120,
         clock: Callable[[], float] = time.time,
         debug_log: str | os.PathLike[str] | None = None,
@@ -1440,7 +1440,7 @@ def _service() -> LocusService:
             max_actions=int(os.environ.get("LOCUS_MAX_ACTIONS", "3000")),
             events_path=os.environ.get("LOCUS_EVENTS"),
             process_timeout=_env_float("LOCUS_PROCESS_TIMEOUT", 30.0),
-            bfs_timeout=_env_float("LOCUS_BFS_TIMEOUT", 60.0),
+            bfs_timeout=_env_float("LOCUS_BFS_TIMEOUT", 300.0),
             backtest_timeout=_env_float("LOCUS_BACKTEST_TIMEOUT", 120.0),
             debug_log=os.environ.get("LOCUS_LOG"),
         )

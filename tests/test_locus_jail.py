@@ -211,11 +211,12 @@ def test_run_bfs_wall_clock_timeout_string(tmp_path):
         )
 
 
-def test_locus_service_default_bfs_timeout_is_60(tmp_path):
-    # Upstream Schema reports BFS exploring 10^3-10^4 modeled states; a long budget
-    # mostly buys wall-clock spent searching a model that may still be wrong.
+def test_locus_service_default_bfs_timeout_is_300(tmp_path):
+    # Measured from banked traces: the slowest BFS call in any run scoring >=92.91
+    # took 293.9s (lp85), so 300s preserves every search that contributed to a win
+    # while still cutting the pathological thrashers (sc25 502.8s, sp80 497.5s).
     with _service(tmp_path) as service:
-        assert service.bfs_timeout == 60
+        assert service.bfs_timeout == 300
 
 
 def test_locus_service_default_backtest_timeout_is_120(tmp_path):
@@ -223,7 +224,7 @@ def test_locus_service_default_backtest_timeout_is_120(tmp_path):
         assert service.backtest_timeout == 120
 
 
-def test_locus_factory_env_default_bfs_timeout_is_60(monkeypatch, tmp_path):
+def test_locus_factory_env_default_bfs_timeout_is_300(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCUS_WORKDIR", str(tmp_path))
     monkeypatch.setenv("LOCUS_GAME", "jail-test")
     monkeypatch.setenv("LOCUS_TURN_ID", "turn-1")
@@ -238,7 +239,7 @@ def test_locus_factory_env_default_bfs_timeout_is_60(monkeypatch, tmp_path):
 
     monkeypatch.setattr(locus, "LocusService", fake_service)
     monkeypatch.setattr(locus, "_SERVICE", None)
-    assert locus._service().bfs_timeout == 60
+    assert locus._service().bfs_timeout == 300
     assert locus._service().backtest_timeout == 120
 
     monkeypatch.setattr(locus, "_SERVICE", None)
