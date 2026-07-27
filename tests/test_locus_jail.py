@@ -211,9 +211,11 @@ def test_run_bfs_wall_clock_timeout_string(tmp_path):
         )
 
 
-def test_locus_service_default_bfs_timeout_is_600(tmp_path):
+def test_locus_service_default_bfs_timeout_is_60(tmp_path):
+    # Upstream Schema reports BFS exploring 10^3-10^4 modeled states; a long budget
+    # mostly buys wall-clock spent searching a model that may still be wrong.
     with _service(tmp_path) as service:
-        assert service.bfs_timeout == 600
+        assert service.bfs_timeout == 60
 
 
 def test_locus_service_default_backtest_timeout_is_120(tmp_path):
@@ -221,7 +223,7 @@ def test_locus_service_default_backtest_timeout_is_120(tmp_path):
         assert service.backtest_timeout == 120
 
 
-def test_locus_factory_env_default_bfs_timeout_is_600(monkeypatch, tmp_path):
+def test_locus_factory_env_default_bfs_timeout_is_60(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCUS_WORKDIR", str(tmp_path))
     monkeypatch.setenv("LOCUS_GAME", "jail-test")
     monkeypatch.setenv("LOCUS_TURN_ID", "turn-1")
@@ -236,7 +238,7 @@ def test_locus_factory_env_default_bfs_timeout_is_600(monkeypatch, tmp_path):
 
     monkeypatch.setattr(locus, "LocusService", fake_service)
     monkeypatch.setattr(locus, "_SERVICE", None)
-    assert locus._service().bfs_timeout == 600
+    assert locus._service().bfs_timeout == 60
     assert locus._service().backtest_timeout == 120
 
     monkeypatch.setattr(locus, "_SERVICE", None)
@@ -246,7 +248,7 @@ def test_locus_factory_env_default_bfs_timeout_is_600(monkeypatch, tmp_path):
     assert locus._service().backtest_timeout == 15.0
 
 
-def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
+def test_run_bfs_default_node_budget_is_fifty_thousand(monkeypatch, tmp_path):
     source = (
         "def step(grid, action, x=None, y=None):\n"
         "    return grid, {}\n\n"
@@ -275,7 +277,7 @@ def test_run_bfs_default_node_budget_is_one_million(monkeypatch, tmp_path):
         service.write_file("world_model_v1.py", source)
 
         assert service.run_bfs("advance", [], max_depth=1) == "captured"
-        assert captured[-1] == (1_000_000, service.bfs_timeout)
+        assert captured[-1] == (50_000, service.bfs_timeout)
 
         assert service.run_bfs(
             "advance", [], max_depth=1, max_nodes=500
