@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .events import EventLog, RunFinished, RunStarted, TurnCommitted, TurnStarted
+from .game_identity import short_game_id
 from .gateway import Gateway, QueuedAction, Transition
 
 
@@ -348,7 +349,11 @@ def replay_and_verify(
     trace = load_released_trace(source)
     run = trace.run_started
     game_id = str(run.get("game_id") or "")
-    if game_id.split("-", 1)[0] != "bp35":
+    try:
+        game = short_game_id(game_id)
+    except ValueError:
+        game = ""
+    if game != "bp35":
         raise ValueError("Step 1 replay acceptance is restricted to bp35")
 
     repo_root = Path(__file__).resolve().parents[1]

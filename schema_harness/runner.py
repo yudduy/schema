@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import fcntl
 import hashlib
 import json
@@ -36,6 +35,8 @@ from .events import (
     TurnStarted,
     TurnTelemetry,
 )
+from .game_identity import canonical_game_id as _canonical_game_id
+from .game_identity import short_game_id
 from .gateway import ExecutionResult, GatewaySnapshot, PersistentGateway
 from .locus import LocusService
 from .narration import commit_result_narration, world_model_line
@@ -195,21 +196,6 @@ class CommittedTurn:
     plan: list[list[int | None]]
     reason: str
     result: ExecutionResult
-
-
-def canonical_game_id(game: str) -> str:
-    """Resolve a public-game shorthand to the scorer's versioned game id."""
-
-    baseline = REPO_ROOT / "vendor" / "baseline_actions.csv"
-    if "-" in game or not baseline.is_file():
-        return game
-    with baseline.open(encoding="utf-8", newline="") as handle:
-        matches = [
-            row["game_id"]
-            for row in csv.DictReader(handle)
-            if row.get("game") == game and row.get("game_id")
-        ]
-    return matches[0] if len(matches) == 1 else game
 
 
 def encode_grid(grid: list[list[int]]) -> str:
@@ -2170,7 +2156,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="enable unproven inspector appendices and commit gates",
     )
     args = parser.parse_args(argv)
-    args.game = canonical_game_id(args.game)
+    args.game = _canonical_game_id(args.game)
     if args.provider is None:
         args.provider = (
             "claude"
@@ -2191,7 +2177,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if args.dry_run:
             args.workdir = Path(tempfile.mkdtemp(prefix="schema-bp35-dry-"))
         else:
-            args.workdir = Path.home() / f"agent-{args.game.split('-', 1)[0]}"
+            try:
+                game_label = short_game_id(args.game)
+            except ValueError as exc:
+                parser.error(str(exc))
+            args.workdir = Path.home() / f"agent-{game_label}"
     if args.max_actions < 1 or args.max_turns < 1:
         parser.error("--max-actions and --max-turns must be positive")
     if args.turn_timeout < 1:

@@ -24,7 +24,9 @@ REPO = Path(__file__).resolve().parents[1]
 ROOT = Path.home() / "schema-sweep"
 RELEASE = ROOT / "release"
 
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from schema_harness.game_identity import short_game_id  # noqa: E402
 from replay_parity import verify_events  # noqa: E402
 
 
@@ -68,15 +70,24 @@ def main() -> None:
         # reproduce byte-for-byte is quarantined: kept out of the release bundle and
         # the mean, recorded only as a rejected claim.
         game_id = str(run.get("game_id") or "")
-        verify_game = game_id.split("-")[0]
-        # Cheap identity check first — never spend a full trajectory replay (and never
-        # report mismatch counts measured against the wrong engine) on a relabeled trace.
-        if verify_game != game:
+        try:
+            verify_game = short_game_id(game_id)
+        except ValueError as exc:
             verdict = None
-            reason = f"ledger key {game!r} != trace game_id {game_id!r} (short {verify_game!r})"
+            reason = str(exc)
         else:
-            verdict = verify_events(ev, game_id)   # full versioned id binds the build
-            reason = None if verdict.green else verdict.reason()
+            # Cheap identity check first — never spend a full trajectory replay (and
+            # never report mismatch counts measured against the wrong engine) on a
+            # relabeled trace.
+            if verify_game != game:
+                verdict = None
+                reason = (
+                    f"ledger key {game!r} != trace game_id {game_id!r} "
+                    f"(short {verify_game!r})"
+                )
+            else:
+                verdict = verify_events(ev, game_id)  # full id binds the build
+                reason = None if verdict.green else verdict.reason()
         if reason is not None:
             manifest["games"][game] = {
                 "replay_verified": False,

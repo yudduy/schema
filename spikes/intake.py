@@ -14,7 +14,10 @@ import json
 import sys
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from schema_harness.game_identity import short_game_id  # noqa: E402
 from sweep import score_game, load_ledger, save_ledger  # noqa: E402
 from replay_parity import verify_events  # noqa: E402
 
@@ -46,7 +49,10 @@ def main() -> None:
     if not game_id:
         raise SystemExit(f"REJECT: {wd} run.json has no game_id — cannot bind the "
                          f"replay engine to the scorer's baseline")
-    game = game_id.split("-")[0]        # ledger key (short form)
+    try:
+        game = short_game_id(game_id)
+    except ValueError as exc:
+        raise SystemExit(f"REJECT: {wd} {exc}") from None
     warns = []
     if driver.get("cli_version") and driver["cli_version"] != EXPECTED_CLI:
         warns.append(f"cli_version={driver['cli_version']!r} != {EXPECTED_CLI!r}")
