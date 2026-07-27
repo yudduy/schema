@@ -335,41 +335,43 @@ def run_phase(phase: str, games: list) -> None:
     log(f"===== PHASE {phase} START ({cfg['model']} {cfg['primary_effort']}) "
         f"over {len(games)} games: {','.join(games)} =====")
     _assert_lock_free()
+    # One game at a time, primary then its own <80 fallback. Two sequential passes
+    # (all primaries, then all fallbacks) let a single non-terminating primary block
+    # every other game's fallback — which is exactly how sp80 stopped tn36 (71.93) and
+    # sc25 (61.44) from ever getting their Sol-max rerun.
     for game in games:
         g = ledger[phase].setdefault(game, {})
-        if g.get("primary_done"):
-            log(f"{game} primary already done: {g['primary']['rhae']}%")
-            continue
-        log(f"--- {phase} PRIMARY {game} ---")
-        try:
-            g["primary"] = run_game(phase, game, cfg["model"],
-                                    cfg["primary_effort"], cfg["provider"], "primary")
-        except RuntimeError as exc:
-            log(f"ABORT PHASE (primary {game}): {exc}")
+        if not g.get("primary_done"):
+            log(f"--- {phase} PRIMARY {game} ---")
+            try:
+                g["primary"] = run_game(phase, game, cfg["model"],
+                                        cfg["primary_effort"], cfg["provider"],
+                                        "primary")
+            except RuntimeError as exc:
+                log(f"ABORT PHASE (primary {game}): {exc}")
+                save_ledger(ledger)
+                return
+            g["primary_done"] = True
             save_ledger(ledger)
-            return
-        g["primary_done"] = True
+        else:
+            log(f"{game} primary already done: {g['primary']['rhae']}%")
+
         if g["primary"]["rhae"] >= 80:
             g["final"] = g["primary"]
-        save_ledger(ledger)
-    for game in games:
-        g = ledger[phase][game]
-        if "final" in g:
-            continue
-        if g.get("fallback_done"):
-            g["final"] = (g["fallback"] if g["fallback"]["rhae"] > g["primary"]["rhae"]
-                          else g["primary"])
             save_ledger(ledger)
             continue
-        log(f"--- {phase} FALLBACK {game} (primary {g['primary']['rhae']}%) ---")
-        try:
-            g["fallback"] = run_game(phase, game, cfg["fallback_model"],
-                                     cfg["fallback_effort"], cfg["provider"], "fallback")
-        except RuntimeError as exc:
-            log(f"ABORT PHASE (fallback {game}): {exc}")
-            save_ledger(ledger)
-            return
-        g["fallback_done"] = True
+
+        if not g.get("fallback_done"):
+            log(f"--- {phase} FALLBACK {game} (primary {g['primary']['rhae']}%) ---")
+            try:
+                g["fallback"] = run_game(phase, game, cfg["fallback_model"],
+                                         cfg["fallback_effort"], cfg["provider"],
+                                         "fallback")
+            except RuntimeError as exc:
+                log(f"ABORT PHASE (fallback {game}): {exc}")
+                save_ledger(ledger)
+                return
+            g["fallback_done"] = True
         g["final"] = (g["fallback"] if g["fallback"]["rhae"] > g["primary"]["rhae"]
                       else g["primary"])
         save_ledger(ledger)

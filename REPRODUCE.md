@@ -26,8 +26,15 @@ Every claim here is checkable from committed code + emitted traces:
 3. **Scoring** — the vendored, stdlib-only `vendor/score_trajectories.py` with
    `vendor/baseline_actions.csv` (human baselines). RHAE is not our formula; it is
    the released scorer consuming our events.
-4. **Contract fidelity** — `spikes/replay_parity.py` replays the released bp35 trace
-   through our env: **566/566 grids byte-identical** (requires `ONLY_RESET_LEVELS=true`).
+4. **Verification (every result re-executed)** — `spikes/replay_parity.py`'s
+   `verify_events` re-runs a trace's action sequence on the ground-truth engine
+   (offline, no API key) and demands byte-identical grids plus matching
+   level/state/level_up and final state — only a real playthrough passes. It is a
+   hard gate: `spikes/intake.py` rejects any submission that fails, and
+   `spikes/export_traces.py` publishes and averages **only** verified traces
+   (quarantining the rest, out of both the bundle and the mean). The verified game is
+   bound to the scorer's `game_id`, so a trace cannot be scored against a different
+   game's baseline. The released bp35 trace replays **566/566 grids byte-identical**.
 
 ## Reproduce one game
 
@@ -78,3 +85,11 @@ source of truth, not any number hardcoded in prose.
 - **Known critiques** of the original (self-reported; public-set-known-in-advance;
   fallback ≈ pass@2) apply to any reproduction. The mitigation here is that the
   harness and every trace are open: re-run it yourself.
+- **What verification does and does not prove.** Replay proves a trace's actions
+  really occurred on the ground-truth engine and produced the claimed grids, levels,
+  and final state — forgery of gameplay is caught. It does **not** prove a trace is
+  *complete*: deleting a provably-inert action (one that leaves every later frame
+  byte-identical) still replays green, so per-level action counts — and thus RHAE —
+  are pinned only up to engine-inert no-ops. For our own runs this is moot (we do not
+  prune); for third-party submissions to a leaderboard it bounds how much efficiency
+  can be overstated, and is best caught by spot re-runs, not by replay alone.
