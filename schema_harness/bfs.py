@@ -48,8 +48,15 @@ class BfsReport:
             "RESET-first option"
         )
         if not self.found:
+            # Naming the real stop reason matters: told "depth", the agent raises
+            # max_depth, which makes node exhaustion strictly worse.
+            if self.expanded >= self.max_nodes:
+                limit = (f"node budget exhausted ({self.max_nodes}) before depth "
+                         f"{self.max_depth} — raise max_nodes, not max_depth")
+            else:
+                limit = f"no goal within depth {self.max_depth}"
             return (
-                f"BFS: no goal within depth {self.max_depth}; expanded {self.expanded} nodes, "
+                f"BFS: {limit}; expanded {self.expanded} nodes, "
                 f"{self.distinct_states} distinct states ({search_space})."
             )
         return (
