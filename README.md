@@ -11,15 +11,40 @@ protocol, tool-result interface, and world-model contract from those artifacts w
 using game solutions. Credit for the method and released traces belongs to Impossible
 Research. This is a reproduction, not their code.
 
-## Current result
+## How it works
 
-Current status: 8 of 11 held-out ("clean") games scored, mean 90.78% RHAE, primary
-run only, no <80 fallback pass completed yet; 3 games outstanding (sp80, s5i5, cn04),
-and sp80 is currently failing.
+An ARC-AGI-3 game supplies a 64×64 grid of colour indices and a set of legal actions —
+no object list, no rule sheet, no stated goal, no shaped reward. The harness makes the
+model treat that as a physics problem, and enforces the discipline in the tool surface
+rather than trusting the model to keep it:
 
-That is a partial clean-set result, not a full benchmark result and not a completed
-pass@2-style protocol result. Do not cite it as a headline "~90%" without those
-caveats.
+1. **Write the theory as a program.** The agent maintains `world_model_v<N>.py`
+   containing `step(state, action)` and `is_goal(state)`. The world model is source
+   code, so it can be read, diffed, executed, and replayed.
+2. **Certify it against the whole history.** `run_backtest` replays the program over
+   every recorded transition. It either reproduces all of them or reports the first
+   divergence.
+3. **Plan inside the certified model.** Because the model is a simulator, `run_bfs`
+   searches it without spending environment actions. Only the resulting plan is
+   executed.
+4. **Act through one gated channel.** `commit_actions` is the sole path to the
+   environment. Every executed step is checked against the model's prediction, and a
+   single mismatch discards the remaining plan and returns the agent to modelling.
+
+The scoring metric squares the action-efficiency ratio, so exploration is expensive and
+brute force is self-defeating. The efficiency comes from paying to discover a mechanism
+once and then computing subsequent plans inside the model.
+
+## Results
+
+Scores are not hardcoded here, because they change as games complete. The source of
+truth is the `MANIFEST.json` emitted by `spikes/export_traces.py`, which carries the
+per-game RHAE, the `events.jsonl` SHA-256, and the replay-verification status of every
+published trace. `~/schema-sweep/ledger.json` holds the local in-progress state.
+
+When quoting a number, state which games it covers, whether it is the held-out set or
+the full public set, and whether it includes the `<80` fallback pass. See
+[What the numbers do and do not claim](#what-the-numbers-do-and-do-not-claim).
 
 ## Evidence chain
 
@@ -145,7 +170,12 @@ per-level action counts—and therefore RHAE—are pinned only up to inert no-op
 Repository runs are not pruned; independent leaderboard submissions would still
 benefit from spot reruns.
 
-The public set was known in advance, and a fallback retains the better of two attempts.
-Those limitations apply even when every trace is open. Report whether a result is
-primary-only or includes the `<80` fallback pass, along with the number and identity of
-games scored.
+The public set was known in advance, and the protocol's fallback retains the better of
+two attempts — effectively pass@2. Those limitations apply even when every trace is
+open, and they apply to the original result as much as to this reconstruction.
+
+Accordingly, a quoted score is incomplete unless it states the number and identity of
+games covered, whether they are the held-out set or the full public set, and whether the
+`<80` fallback pass ran. A partially complete sweep must not be reported as a benchmark
+result, and games that are still failing must not be omitted from the mean that is
+quoted.
