@@ -6,7 +6,7 @@ import json
 import math
 import os
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, ClassVar, TypeAlias

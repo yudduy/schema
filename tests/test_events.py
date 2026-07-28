@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 import schema_harness.events as events_module
 from schema_harness.events import (
     ActionTaken,

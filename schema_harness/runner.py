@@ -36,8 +36,7 @@ from .events import (
     TurnTelemetry,
     iter_json_objects,
 )
-from .game_identity import canonical_game_id as _canonical_game_id
-from .game_identity import short_game_id
+from .game_identity import canonical_game_id, short_game_id
 from .gateway import ExecutionResult, GatewaySnapshot, PersistentGateway
 from .locus import LocusService
 from .narration import commit_result_narration, world_model_line
@@ -2112,7 +2111,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="enable unproven inspector appendices and commit gates",
     )
     args = parser.parse_args(argv)
-    args.game = _canonical_game_id(args.game)
+    args.game = canonical_game_id(args.game)
     if args.provider is None:
         args.provider = (
             "claude"
