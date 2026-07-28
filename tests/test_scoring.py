@@ -93,7 +93,7 @@ def test_importing_intake_does_not_create_sweep_directory(tmp_path):
     environment["HOME"] = str(home)
 
     completed = subprocess.run(
-        [sys.executable, "-c", "import spikes.intake"],
+        [sys.executable, "-c", "import tools.intake"],
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,

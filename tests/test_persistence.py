@@ -5,7 +5,7 @@ import os
 import pytest
 
 from schema_harness import persistence
-from spikes import sweep
+from tools import sweep
 
 
 ATOMIC_WRITERS = (persistence.atomic_json,)

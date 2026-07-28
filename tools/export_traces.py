@@ -11,7 +11,7 @@ unchanged.
         traces/<phase>/<game>/events.jsonl   # the official-schema trajectory
         traces/<phase>/<game>/run.json       # config + pinned driver metadata
 
-Usage:  uv run python spikes/export_traces.py [phase]     (default: sol)
+Usage:  uv run python tools/export_traces.py [phase]     (default: sol)
 """
 import hashlib
 import json
@@ -27,7 +27,7 @@ RELEASE = ROOT / "release"
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from schema_harness.game_identity import short_game_id  # noqa: E402
-from replay_parity import verify_events  # noqa: E402
+from verify import verify_events  # noqa: E402
 
 
 def sha256(p: Path) -> str:

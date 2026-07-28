@@ -14,9 +14,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "spikes"))
+sys.path.insert(0, str(REPO))
 
-from replay_parity import verify_events  # noqa: E402
+from verify import verify_events  # noqa: E402
 
 BP35 = REPO / "vendor" / "bp35_events.jsonl"
 
@@ -101,7 +101,7 @@ def test_intake_binds_verified_game_to_run_json_game_id(tmp_path):
     (wd / "run.json").write_text(json.dumps(
         {"game_id": "tu93-0768757b", "model": "gpt-5.6-sol", "effort": "max"}))
     r = subprocess.run(
-        [sys.executable, str(REPO / "spikes" / "intake.py"), str(wd)],
+        [sys.executable, str(REPO / "tools" / "intake.py"), str(wd)],
         capture_output=True, text=True, cwd=str(REPO))
     assert r.returncode != 0
     assert "failed replay verification" in (r.stdout + r.stderr)

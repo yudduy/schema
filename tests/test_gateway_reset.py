@@ -16,7 +16,7 @@ from schema_harness.narration import (
     surprise_message,
 )
 from schema_harness.replay_verify import execute_commit, load_released_trace
-from spikes import replay_parity
+import verify as replay_parity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

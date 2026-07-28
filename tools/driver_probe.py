@@ -1,6 +1,6 @@
 """Step 0b spike: verify the headless `claude -p --resume` driver mechanics.
 
-Runs two turns against the stub `locus` MCP server (spikes/stub_locus.py) in an
+Runs two turns against the stub `locus` MCP server (tools/stub_locus.py) in an
 isolated CLAUDE_CONFIG_DIR and checks:
   1. MCP tools load and are callable in a headless turn
   2. commit_actions works; the post-commit lock rejects later tool calls
@@ -9,7 +9,7 @@ isolated CLAUDE_CONFIG_DIR and checks:
   5. zero permission prompts (bypassPermissions + strict mcp)
   6. native tools and skills are absent (a requested Bash call cannot run)
 
-Usage: uv run python spikes/driver_probe.py [--model claude-haiku-4-5-20251001]
+Usage: uv run python tools/driver_probe.py [--model claude-haiku-4-5-20251001]
 """
 
 import argparse
@@ -24,7 +24,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 VENV_PY = REPO / ".venv" / "bin" / "python"
-STUB = REPO / "spikes" / "stub_locus.py"
+STUB = REPO / "tools" / "stub_locus.py"
 
 
 def _as_text(value):

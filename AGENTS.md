@@ -2,7 +2,9 @@
 
 ## Architectural constraints
 
-- `docs/contract.md` is frozen and read-only. Preserve its contamination and
+- `docs/contract.md` is frozen and read-only. Its `spikes/...` paths are a historical
+  record of how each fact was verified; those tools now live at `verify.py` and under
+  `tools/`. Do not edit the contract to fix them. Preserve its contamination and
   game-agnostic boundaries: never inspect game source under `environment_files/`,
   derive solutions from fixtures, or expose repository internals to the playing agent.
 - Treat `vendor/` as immutable reference evidence. Keep live workdirs outside the
@@ -31,9 +33,9 @@
 - World-model loading/execution, parity checks, planning, and search:
   `schema_harness/model_loader.py`, `schema_harness/model_worker.py`,
   `schema_harness/backtest.py`, and `schema_harness/bfs.py`.
-- Contributor/release replay gate: `spikes/replay_parity.py`. Sweep orchestration,
-  intake, and verified export: `spikes/sweep.py`, `spikes/intake.py`, and
-  `spikes/export_traces.py`.
+- Contributor/release replay gate: `verify.py`. Sweep orchestration,
+  intake, and verified export: `tools/sweep.py`, `tools/intake.py`, and
+  `tools/export_traces.py`.
 - RHAE semantics and human baselines: `vendor/score_trajectories.py` and
   `vendor/baseline_actions.csv`. Wrappers may adapt inputs and output, but must not
   reimplement the score.
@@ -50,8 +52,7 @@ For replay or scoring changes, also run the focused acceptance checks:
 
 ```bash
 uv run pytest -q tests/test_replay_bp35.py tests/test_replay_verify_gate.py
-ONLY_RESET_LEVELS=true uv run python spikes/replay_parity.py \
-  vendor/bp35_events.jsonl --game bp35-0a0ad940
+ONLY_RESET_LEVELS=true uv run python verify.py vendor/bp35_events.jsonl --game bp35-0a0ad940
 ```
 
 Commit with `committer "<conventional message>" <exact paths...>`. Never stage the

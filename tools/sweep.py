@@ -7,7 +7,7 @@ scores each game with the vendored scorer, runs the blog's <80 fallback pass,
 and aggregates the benchmark mean. Checkpoints to ~/schema-sweep/ledger.json so
 it resumes cleanly after any interruption (including a reboot + relaunch).
 
-Usage:  ONLY_RESET_LEVELS=true uv run python spikes/sweep.py <phase>
+Usage:  ONLY_RESET_LEVELS=true uv run python tools/sweep.py <phase>
         phase in {sol, opus, selftest}
 """
 import json

@@ -38,7 +38,7 @@ once and then computing subsequent plans inside the model.
 ## Results
 
 Scores are not hardcoded here, because they change as games complete. The source of
-truth is the `MANIFEST.json` emitted by `spikes/export_traces.py`, which carries the
+truth is the `MANIFEST.json` emitted by `tools/export_traces.py`, which carries the
 per-game RHAE, the `events.jsonl` SHA-256, and the replay-verification status of every
 published trace. `~/schema-sweep/ledger.json` holds the local in-progress state.
 
@@ -58,12 +58,12 @@ Every accepted result has four independently inspectable layers:
 3. **Score:** `vendor/score_trajectories.py` and `vendor/baseline_actions.csv` compute
    Regret-Human-Action-Efficiency (RHAE) from the released scoring procedure and human
    action baselines.
-4. **Replay verification:** `spikes/replay_parity.py` re-executes every recorded action
+4. **Replay verification:** `verify.py` re-executes every recorded action
    on the ground-truth engine and requires the initial frame, every settled grid,
    running level and state, every `level_up`, and the final outcome to match.
 
-`spikes/intake.py` applies the scorer and replay gate to contributed workdirs.
-`spikes/export_traces.py` publishes and averages only replay-verified traces; failed
+`tools/intake.py` applies the scorer and replay gate to contributed workdirs.
+`tools/export_traces.py` publishes and averages only replay-verified traces; failed
 verification is quarantined rather than included in the bundle or mean. The trace's
 full versioned game ID is bound to both replay and scoring, preventing a trace from
 being relabeled against another game's baseline.
@@ -105,7 +105,7 @@ uv run agent.py --game vc33 --render
 Run one game through the canonical Sol sweep protocol:
 
 ```bash
-ONLY_RESET_LEVELS=true caffeinate -is uv run python spikes/sweep.py sol <game>
+ONLY_RESET_LEVELS=true caffeinate -is uv run python tools/sweep.py sol <game>
 ```
 
 `ONLY_RESET_LEVELS=true` is mandatory for live runs (the runner refuses without it).

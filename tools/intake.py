@@ -2,8 +2,8 @@
 """Verify and score a helper-returned game workdir with the vendored scorer.
 
 Usage:
-    uv run python spikes/intake.py <workdir>                # verify + score + manifest line
-    uv run python spikes/intake.py <workdir> --merge sol    # also record into the ledger
+    uv run python tools/intake.py <workdir>                # verify + score + manifest line
+    uv run python tools/intake.py <workdir> --merge sol    # also record into the ledger
 
 Checks the driver pins recorded in run.json, scores events.jsonl, and prints a
 manifest line with the events SHA-256 so the result is auditable end-to-end.
@@ -23,7 +23,7 @@ from schema_harness.scoring import (  # noqa: E402
     VendoredScorerError,
     score_workdir,
 )
-from replay_parity import verify_events  # noqa: E402
+from verify import verify_events  # noqa: E402
 
 EXPECTED_CLI = "codex-cli 0.144.1"
 

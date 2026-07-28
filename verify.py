@@ -1,6 +1,6 @@
 """Replay a released gameplay trace and compare settled grids.
 
-Usage: python spikes/replay_parity.py EVENTS_JSONL [--game bp35] [--online]
+Usage: python verify.py EVENTS_JSONL [--game bp35] [--online]
 
 Also exposes ``verify_events(events_path, game) -> Verdict``, the reusable gate the
 intake and release-export paths use to re-execute a submitted trajectory on the

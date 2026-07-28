@@ -8,7 +8,7 @@ import sys
 import pytest
 
 import schema_harness.runner as runner_module
-import spikes.driver_probe as driver_probe
+import tools.driver_probe as driver_probe
 from schema_harness.gateway import ExecutionResult, GatewaySnapshot
 from schema_harness.runner import (
     CommittedTurn,
@@ -233,7 +233,7 @@ def test_context_rollover_uses_iteration_occupancy_not_aggregate_usage():
 
 
 def test_default_system_prompt_is_v9_matched_transfer():
-    assert runner_module.DEFAULT_SYSTEM_PROMPT.name == "physicist_v9_matched_transfer.md"
+    assert runner_module.DEFAULT_SYSTEM_PROMPT.name == "physicist.md"
     assert runner_module.DEFAULT_SYSTEM_PROMPT.is_file()
 
 

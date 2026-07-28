@@ -24,7 +24,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "schema_harness"
 
-from spikes.driver_probe import oauth_token, run_turn as run_claude_turn
+from tools.driver_probe import oauth_token, run_turn as run_claude_turn
 
 from .events import (
     EventLog,
@@ -57,7 +57,7 @@ _CODEX_REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 )
 DEFAULT_SYSTEM_PROMPT = (
-    REPO_ROOT / "schema_harness" / "prompts" / "physicist_v9_matched_transfer.md"
+    REPO_ROOT / "schema_harness" / "prompts" / "physicist.md"
 )
 NOTES_TEMPLATE = """# Notes — your living scratchpad (shown to you every turn).
 # Keep it CONCISE; edit and PRUNE stale entries with write_file / edit_file as you learn.
