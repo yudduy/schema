@@ -12,6 +12,7 @@ Usage:  ONLY_RESET_LEVELS=true uv run python tools/sweep.py <phase>
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,6 @@ os.environ.setdefault("ONLY_RESET_LEVELS", "true")
 
 REPO = Path(__file__).resolve().parents[1]
 ROOT = Path.home() / "schema-sweep"
-ROOT.mkdir(exist_ok=True)
 LEDGER = ROOT / "ledger.json"
 PROGRESS = ROOT / "progress.log"
 
@@ -80,9 +80,15 @@ NO_PROGRESS_GIVEUP = 3           # genuine agent stalls still move on (don't blo
 TURN_TIMEOUT = 3600
 TURN_TOKEN_CAP = 20_000_000
 
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+_TERMINAL_EXCEPTION = re.compile(
+    r"(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Error|Exception):[^\r\n]*"
+)
+
 
 def log(msg: str) -> None:
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    PROGRESS.parent.mkdir(parents=True, exist_ok=True)
     with open(PROGRESS, "a") as f:
         f.write(line + "\n")
     print(line, flush=True)
@@ -181,6 +187,7 @@ def run_once(game, wd, model, effort, provider, max_turns) -> str:
     if provider == "claude":
         cmd += ["--run-cost-cap", "100000", "--turn-cost-cap", "10000"]
     log_path = ROOT / f"runner-{wd.name}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as fh:
         proc = subprocess.Popen(cmd, cwd=str(REPO), env=env, stdout=fh,
                                 stderr=subprocess.STDOUT, text=True,
@@ -193,22 +200,53 @@ def run_once(game, wd, model, effort, provider, max_turns) -> str:
     return out
 
 
+def _runner_crashed(output: str) -> bool:
+    """Return whether runner output contains an unhandled Python exception signature."""
+    lines = output.splitlines()
+    if any(line.rstrip() == _TRACEBACK_HEADER for line in lines):
+        return True
+    terminal_line = next(
+        (line.rstrip() for line in reversed(lines) if line.strip()),
+        "",
+    )
+    return _TERMINAL_EXCEPTION.fullmatch(terminal_line) is not None
+
+
+def _backoff(game: str, tag: str, reason: str, retries: int) -> None:
+    wait = min(600, 120 * retries)
+    log(f"{game} [{tag}] {reason}, backoff {wait}s (retry {retries})")
+    time.sleep(wait)
+
+
 def run_game(phase, game, model, effort, provider, tag) -> dict:
     wd = ROOT / f"{phase}-{tag}-{game}"
     _, _, _, turns_done = snapshot_state(wd)
     max_turns = max(START_MAX_TURNS, turns_done + TURN_GROW)
+    previous_log_path = ROOT / f"runner-{wd.name}.log"
+    previous_output = (
+        previous_log_path.read_text() if previous_log_path.exists() else ""
+    )
+    must_reinvoke_after_crash = _runner_crashed(previous_output)
     invocations = driver_retries = no_progress = 0
+    crash_retries = 1 if must_reinvoke_after_crash else 0
+    if must_reinvoke_after_crash:
+        log(f"{game} [{tag}] prior runner crash detected; re-invoking before "
+            f"scoring; tail: {previous_output.strip()[-250:]}")
     while True:
         state, level, hist, turns_done = snapshot_state(wd)
-        if state == "WIN":
-            log(f"{game} [{tag}] already WIN")
-            break
-        if hist >= MAX_ACTIONS:
-            log(f"{game} [{tag}] exhausted {MAX_ACTIONS} actions")
-            break
-        if invocations >= MAX_INVOCATIONS:
-            log(f"{game} [{tag}] giving up (invocations={invocations})")
-            break
+        if not must_reinvoke_after_crash:
+            if state == "WIN":
+                log(f"{game} [{tag}] already WIN")
+                break
+            if hist >= MAX_ACTIONS:
+                log(f"{game} [{tag}] exhausted {MAX_ACTIONS} actions")
+                break
+            if invocations >= MAX_INVOCATIONS:
+                raise RuntimeError(
+                    f"{game} [{tag}] exhausted the invocation limit "
+                    f"({MAX_INVOCATIONS}) without a legitimate stop — "
+                    f"aborting without scoring"
+                )
         if turns_done + 1 > max_turns:
             max_turns = min(MAX_TURNS_CAP, turns_done + TURN_GROW)
         invocations += 1
@@ -220,8 +258,24 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
             raise RuntimeError(
                 f"{game}: harness live-lock contention (another runner active) — "
                 f"aborting to avoid a false-0.0 cascade; kill stray runners first")
-        if state == "WIN" or hist >= MAX_ACTIONS:
+        if _runner_crashed(out):
+            crash_retries += 1
+            if crash_retries > MAX_DRIVER_RETRIES:
+                raise RuntimeError(
+                    f"{game} [{tag}] crashed repeatedly "
+                    f"({crash_retries} crashes; retry budget "
+                    f"{MAX_DRIVER_RETRIES}) — aborting without scoring; "
+                    f"tail: {out.strip()[-250:]}"
+                )
+            must_reinvoke_after_crash = True
+            _backoff(
+                game,
+                tag,
+                f"runner crash; tail: {out.strip()[-250:]}",
+                crash_retries,
+            )
             continue
+        crash_retries = 0
         if "WATCHDOG-HANG-KILLED" in out:
             log(f"{game} [{tag}] hang watchdog fired (events quiet "
                 f">{TURN_TIMEOUT + WATCHDOG_GRACE}s — dead network stream?); re-invoking")
@@ -233,9 +287,10 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
                 log(f"{game} [{tag}] WALL: sustained driver errors — likely quota "
                     f"exhausted or network down. NOT stopping: retrying every ~10min; "
                     f"auto-resumes when a fresh account is logged in or quota resets.")
-            wait = min(600, 120 * driver_retries)
-            log(f"{game} [{tag}] driver error, backoff {wait}s (retry {driver_retries})")
-            time.sleep(wait)
+            _backoff(game, tag, "driver error", driver_retries)
+            continue
+        must_reinvoke_after_crash = False
+        if state == "WIN" or hist >= MAX_ACTIONS:
             continue
         if "no progress" in out:
             no_progress += 1
@@ -263,8 +318,12 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
             log(f"{game} [{tag}] turn budget exhausted at {turns_done}; "
                 f"growing to {max_turns}")
             continue
-        log(f"{game} [{tag}] unknown stop; tail: {out[-250:]}")
-        break
+        tail = out.strip()[-250:]
+        log(f"{game} [{tag}] unknown stop; tail: {tail}")
+        raise RuntimeError(
+            f"{game} [{tag}] unknown stop — aborting without scoring; "
+            f"tail: {tail}"
+        )
     try:
         score = score_workdir(wd)
     except VendoredScorerError as exc:
