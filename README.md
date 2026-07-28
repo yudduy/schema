@@ -37,38 +37,32 @@ once and then computing subsequent plans inside the model.
 
 ## Results so far
 
-Sol phase (GPT-5.6-Sol), snapshot of 2026-07-28. Every run below replays green on the
-ground-truth engine. `ratio` is agent actions ÷ first-time-human actions, so **lower is
-better** and anything under 1.00 beat the human.
+8 of 11 held-out games done, averaging **90.78%**. Every run below was re-verified on the
+real game engine.
 
-### Held-out set — 8 of 11 scored, mean **90.78%**
+`actions` is how many moves the agent used; `human` is what a first-time human needed.
+**Fewer is better.**
 
-| game | RHAE | levels | actions | human | ratio |
-|------|-----:|-------:|--------:|------:|------:|
-| cd82 | 100.00 | 6/6 | 99 | 171 | 0.58× |
-| lp85 | 100.00 | 8/8 | 109 | 388 | 0.28× |
-| su15 | 100.00 | 9/9 | 176 | 361 | 0.49× |
-| tr87 | 100.00 | 6/6 | 176 | 414 | 0.43× |
-| tu93 | 100.00 | 9/9 | 224 | 462 | 0.48× |
-| vc33 | 92.91 | 7/7 | 363 | 447 | 0.81× |
-| tn36 | 71.93 | 7/7 | 2364 | 317 | 7.46× |
-| sc25 | 61.44 | 6/6 | 530 | 350 | 1.51× |
-| sp80, s5i5, cn04 | — | — | — | — | not yet scored |
+| game | score | levels | actions | human |
+|------|------:|-------:|--------:|------:|
+| cd82 | 100.00 | 6/6 | **99** | 171 |
+| lp85 | 100.00 | 8/8 | **109** | 388 |
+| su15 | 100.00 | 9/9 | **176** | 361 |
+| tr87 | 100.00 | 6/6 | **176** | 414 |
+| tu93 | 100.00 | 9/9 | **224** | 462 |
+| vc33 | 92.91 | 7/7 | **363** | 447 |
+| tn36 | 71.93 | 7/7 | 2364 | 317 |
+| sc25 | 61.44 | 6/6 | 530 | 350 |
 
-**Read the table above as a partial result, not a benchmark score.** Three held-out games
-are unscored, so 90.78% is a mean over the 8 that finished. All runs are the `xhigh`
-primary — no `<80` fallback has completed yet, so the figures can only improve. The five
-perfect games clear every level in 0.28–0.58× the human action count, inside the
-1.6–5.0× efficiency band the original work reports.
+Six of the eight beat the human, some by 3×. The two low scores are games where the agent
+burned a lot of moves before it worked out the mechanism — the score squares that penalty.
 
-This table is a snapshot and will go stale. The live source of truth is the
-`MANIFEST.json` emitted by `tools/export_traces.py`, carrying per-game RHAE, the
-`events.jsonl` SHA-256, and replay-verification status for every published trace;
-`~/schema-sweep/ledger.json` holds in-progress state.
+Still to run: `sp80`, `s5i5`, `cn04`. Numbers here are a 2026-07-28 snapshot of the
+first-pass runs only; the retry pass for low scores hasn't happened yet, so they can only
+go up. Live numbers live in the `MANIFEST.json` that `tools/export_traces.py` writes.
 
-When quoting a number, state which games it covers, whether it is the held-out set or
-the full public set, and whether it includes the `<80` fallback pass. See
-[What the numbers do and do not claim](#what-the-numbers-do-and-do-not-claim).
+The other 14 public games aren't listed: the source material explains how they work, so
+they can't be honest replication evidence. They're scored separately, never mixed in.
 
 ## Evidence chain
 
