@@ -911,13 +911,17 @@ def _codex_usage_delta_tokens(
     """Convert one thread-cumulative Codex snapshot into runner-turn tokens."""
 
     current = _codex_usage_snapshot(usage, previous)
-    if previous is not None:
-        regressions = [
-            key for key in _CODEX_USAGE_FIELDS if current[key] < previous.get(key, 0)
-        ]
-        if regressions:
-            fields = ", ".join(regressions)
-            raise ValueError(f"Codex cumulative token usage regressed: {fields}")
+    if previous is not None and any(
+        current[key] < previous.get(key, 0) for key in _CODEX_USAGE_FIELDS
+    ):
+        # Codex auto-compacts a thread at DEFAULT_CODEX_COMPACT_TOKENS and restarts its
+        # cumulative counters, so a regression means "new accounting epoch", not
+        # corruption. Re-read the snapshot without carrying prior values forward and
+        # charge it in full: tokens before the reset were already charged to earlier
+        # turns, and counting the new epoch whole is the conservative direction for a cap.
+        # Aborting here instead costs a whole game run (observed live on sc25).
+        current = _codex_usage_snapshot(usage)
+        return _aggregate_usage_tokens(current), current
     prior_total = _aggregate_usage_tokens(previous)
     return _aggregate_usage_tokens(current) - prior_total, current
 
@@ -1658,14 +1662,12 @@ def _historical_driver_totals(
         session_id = record.get("session_id")
         if isinstance(session_id, str) and session_id:
             if _codex_usage_has_counters(usage):
-                try:
-                    turn_tokens, snapshot = _codex_usage_delta_tokens(
-                        usage, session_usage.get(session_id)
-                    )
-                except ValueError as exc:
-                    raise RuntimeError(
-                        "events.jsonl contains regressed Codex token usage"
-                    ) from exc
+                # _codex_usage_violation above already rejected any non-int or negative
+                # counter, and a cumulative reset is handled as a new epoch, so the
+                # delta call cannot fail here.
+                turn_tokens, snapshot = _codex_usage_delta_tokens(
+                    usage, session_usage.get(session_id)
+                )
                 tokens += turn_tokens
                 session_usage[session_id] = snapshot
         else:
@@ -1904,29 +1906,14 @@ def _run_live(args: argparse.Namespace) -> int:
             and usage_violation is None
             and _codex_usage_has_counters(result.get("usage"))
         ):
-            try:
-                turn_tokens, usage_snapshot = _codex_usage_delta_tokens(
-                    result.get("usage"),
-                    codex_session_usage.get(reported_session_id),
-                )
-            except ValueError as exc:
-                violations = result.get("violations")
-                violation_list = (
-                    [str(item) for item in violations]
-                    if isinstance(violations, list)
-                    else []
-                )
-                violation_list.append(str(exc))
-                result["violations"] = list(dict.fromkeys(violation_list))
-                result["is_error"] = True
-                result["result"] = (
-                    "Codex driver rejected the turn: cumulative token usage regressed. "
-                    "See private driver logs."
-                )
-                turn_tokens = 0
-            else:
-                if reported_session_id:
-                    codex_session_usage[reported_session_id] = usage_snapshot
+            # Malformed usage is excluded by the guard above, and a cumulative reset is
+            # absorbed as a new epoch, so this cannot fail the turn.
+            turn_tokens, usage_snapshot = _codex_usage_delta_tokens(
+                result.get("usage"),
+                codex_session_usage.get(reported_session_id),
+            )
+            if reported_session_id:
+                codex_session_usage[reported_session_id] = usage_snapshot
         result_is_error = bool(result.get("is_error"))
         if not result_is_error and reported_session_id:
             session_id = reported_session_id

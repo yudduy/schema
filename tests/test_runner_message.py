@@ -1807,9 +1807,12 @@ def test_codex_live_token_cap_uses_same_session_deltas(
     assert calls == expected_calls
 
 
-def test_codex_live_cumulative_usage_regression_invalidates_session(
+def test_codex_live_cumulative_usage_reset_keeps_the_session_alive(
     monkeypatch, tmp_path
 ):
+    # A mid-session counter reset is Codex compacting its thread, not a broken turn.
+    # It must not invalidate the session or error the turn — doing so cost a whole
+    # game run when it happened live on sc25.
     snapshot = _snapshot()
     totals = iter((100, 99))
     monkeypatch.setenv("ONLY_RESET_LEVELS", "true")
@@ -1857,17 +1860,24 @@ def test_codex_live_cumulative_usage_regression_invalidates_session(
         ]
     )
 
-    assert runner_module._run_live(args) == 1
+    # The reset no longer aborts: the run completes both turns normally.
+    assert runner_module._run_live(args) == 0
     checkpoint = json.loads(
         (tmp_path / "sessions" / "sessions.json").read_text(encoding="utf-8")
     )
-    assert checkpoint["invalidated"] is True
+    assert checkpoint.get("invalidated") is not True
     records = [
         json.loads(line)
         for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     telemetry = [record for record in records if record["kind"] == "turn_telemetry"]
-    assert telemetry[-1]["is_error"] is True
+    assert telemetry[-1]["is_error"] is False
+    assert not any(
+        "regressed" in str(v) for v in telemetry[-1].get("violations", [])
+    )
+    # 100 for the first epoch, then the post-reset snapshot charged in full.
+    _, tokens, _, _ = runner_module._historical_driver_totals(tmp_path)
+    assert tokens == 199
 
 
 def test_missing_codex_rollout_starts_fresh_session(monkeypatch, tmp_path):
@@ -2077,7 +2087,25 @@ def test_codex_cumulative_usage_preserves_omitted_counters():
     assert current["output_tokens"] == 10
 
 
-def test_historical_codex_cumulative_usage_regression_fails_closed(tmp_path):
+def test_codex_cumulative_usage_reset_starts_a_new_epoch():
+    # Codex auto-compacts a thread at DEFAULT_CODEX_COMPACT_TOKENS and restarts its
+    # cumulative counters. Observed live on sc25: 887,778 -> 474,376 inside one session.
+    # A reset is not corruption, so it must not abort the run; the post-reset snapshot is
+    # a fresh epoch and counts in full (tokens before the reset were already charged to
+    # earlier turns). Counting in full is the conservative direction for a token cap.
+    _, previous = runner_module._codex_usage_delta_tokens(
+        {"input_tokens": 800, "output_tokens": 88}, None
+    )
+    delta, current = runner_module._codex_usage_delta_tokens(
+        {"input_tokens": 400, "output_tokens": 40}, previous
+    )
+
+    assert delta == 440
+    assert current == {**{k: 0 for k in runner_module._CODEX_USAGE_FIELDS},
+                       "input_tokens": 400, "output_tokens": 40}
+
+
+def test_historical_codex_cumulative_usage_reset_does_not_abort_resume(tmp_path):
     records = [
         {
             "kind": "turn_telemetry",
@@ -2096,8 +2124,11 @@ def test_historical_codex_cumulative_usage_regression_fails_closed(tmp_path):
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
     )
 
-    with pytest.raises(RuntimeError, match="regressed Codex token usage"):
-        runner_module._historical_driver_totals(tmp_path)
+    _, tokens, _, session_usage = runner_module._historical_driver_totals(tmp_path)
+
+    # 100 for the first epoch, then 99 counted in full for the post-reset epoch.
+    assert tokens == 199
+    assert session_usage["thread-a"]["input_tokens"] == 99
 
 
 def test_historical_codex_unavailable_usage_preserves_session_baseline(tmp_path):
