@@ -1,10 +1,11 @@
 """Hygiene checks on the production method prompt.
 
 This file used to pin the literal wording of nine experimental prompt variants. Those
-variants were the METHOD-lane experiment, it concluded, and only its winner ships (the
-history lives under the `archive/goal1` tag). What is worth protecting is not the
-prose but the invariants the prompt must keep carrying: the contamination boundary, and
-the four steps of the loop the harness enforces in its tool surface.
+variants were the METHOD-lane experiment, it concluded, and only its winner ships (they
+remain in git history; the lane merge commits on main mark where each lane ended). What
+is worth protecting is not the prose but the invariants the prompt must keep carrying:
+the contamination boundary, and the four steps of the loop the harness enforces in its
+tool surface.
 """
 from __future__ import annotations
 

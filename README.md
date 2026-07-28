@@ -35,12 +35,44 @@ The scoring metric squares the action-efficiency ratio, so exploration is expens
 brute force is self-defeating. The efficiency comes from paying to discover a mechanism
 once and then computing subsequent plans inside the model.
 
-## Results
+## Results so far
 
-Scores are not hardcoded here, because they change as games complete. The source of
-truth is the `MANIFEST.json` emitted by `tools/export_traces.py`, which carries the
-per-game RHAE, the `events.jsonl` SHA-256, and the replay-verification status of every
-published trace. `~/schema-sweep/ledger.json` holds the local in-progress state.
+Sol phase (GPT-5.6-Sol), snapshot of 2026-07-28. Every run below replays green on the
+ground-truth engine. `ratio` is agent actions ÷ first-time-human actions, so **lower is
+better** and anything under 1.00 beat the human.
+
+### Held-out set — 8 of 11 scored, mean **90.78%**
+
+| game | RHAE | levels | actions | human | ratio |
+|------|-----:|-------:|--------:|------:|------:|
+| cd82 | 100.00 | 6/6 | 99 | 171 | 0.58× |
+| lp85 | 100.00 | 8/8 | 109 | 388 | 0.28× |
+| su15 | 100.00 | 9/9 | 176 | 361 | 0.49× |
+| tr87 | 100.00 | 6/6 | 176 | 414 | 0.43× |
+| tu93 | 100.00 | 9/9 | 224 | 462 | 0.48× |
+| vc33 | 92.91 | 7/7 | 363 | 447 | 0.81× |
+| tn36 | 71.93 | 7/7 | 2364 | 317 | 7.46× |
+| sc25 | 61.44 | 6/6 | 530 | 350 | 1.51× |
+| sp80, s5i5, cn04 | — | — | — | — | not yet scored |
+
+### Contaminated set — 2 of 14 scored, mean **100.00%**
+
+| game | RHAE | levels | actions | human | ratio |
+|------|-----:|-------:|--------:|------:|------:|
+| ar25 | 100.00 | 8/8 | 265 | 748 | 0.35× |
+| r11l | 100.00 | 6/6 | 168 | 233 | 0.72× |
+
+**Read this as a partial result, not a benchmark score.** Three held-out games are
+unscored, so the 90.78% is a mean over the 8 that finished; the two sets are never
+merged into one number. All runs above are the `xhigh` primary — no `<80` fallback has
+completed yet, so the figures can only improve. The five perfect games clear every level
+in 0.28–0.58× the human action count, which is the 1.6–5.0× efficiency band the original
+work reports.
+
+This table is a snapshot and will go stale. The live source of truth is the
+`MANIFEST.json` emitted by `tools/export_traces.py`, carrying per-game RHAE, the
+`events.jsonl` SHA-256, and replay-verification status for every published trace;
+`~/schema-sweep/ledger.json` holds in-progress state.
 
 When quoting a number, state which games it covers, whether it is the held-out set or
 the full public set, and whether it includes the `<80` fallback pass. See
