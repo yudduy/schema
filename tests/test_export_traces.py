@@ -191,3 +191,42 @@ def test_manifest_and_output_split_clean_and_contaminated_means(
     assert "ids: bp35" in stdout
     assert "all-games mixed mean RHAE (2/25" in stdout
     assert "mixes clean + contaminated" in stdout
+
+
+def test_quarantined_game_prints_as_a_red_table_row(
+    exporter, monkeypatch, capsys,
+):
+    workdir = exporter.ROOT / "recorded-bp35"
+    bp35 = _result(workdir, 100.0)
+    _write_ledger(exporter, {
+        "bp35": {"primary": bp35, "final": bp35},
+    })
+    _write_trace(workdir, "bp35-0a0ad940")
+    red_verdict = SimpleNamespace(
+        green=False,
+        steps_replayed=3,
+        grid_mismatches=1,
+        reason=lambda: "test grid mismatch",
+    )
+    monkeypatch.setattr(exporter, "verify_events", lambda *_: red_verdict)
+
+    exporter.main()
+
+    manifest = json.loads((exporter.RELEASE / "MANIFEST.json").read_text())
+    assert manifest["games"]["bp35"]["claimed_rhae"] == 100.0
+    assert (
+        manifest["rhae_summary"]["contaminated"]["game_ids_included"] == []
+    )
+    stdout_lines = capsys.readouterr().out.splitlines()
+    header_index = next(
+        index for index, line in enumerate(stdout_lines)
+        if line.startswith("game") and "replay" in line
+    )
+    summary_index = next(
+        index for index, line in enumerate(stdout_lines)
+        if line.startswith("clean-set mean RHAE")
+    )
+    table_rows = stdout_lines[header_index + 1:summary_index]
+    assert any(
+        line.startswith("bp35") and "RED" in line for line in table_rows
+    )

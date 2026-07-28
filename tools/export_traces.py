@@ -166,6 +166,9 @@ def main() -> None:
                 "replay_grid_mismatches": verdict.grid_mismatches if verdict else -1,
                 "replay_error": reason,
                 "claimed_rhae": final["rhae"],
+                "state": final.get("state"),
+                "levels": final.get("levels"),
+                "model": run.get("model"),
             }
             unverified.append(game)
             # Export is re-runnable: a game green in an earlier run may be red now.
@@ -224,9 +227,24 @@ def main() -> None:
     print(f"exported {len(scores)} verified games -> {RELEASE}")
     print(f"{'game':6} {'RHAE':>7} {'state':10} {'levels':8} {'replay':7} {'model':14}")
     for g, m in sorted(manifest["games"].items()):
-        if "rhae" in m:
-            mark = "GREEN" if m.get("replay_verified") else "RED"
-            print(f"{g:6} {m['rhae']:>6.2f}% {m['state']:10} {m['levels']:8} {mark:7} {m['model']:14}")
+        if m.get("replay_verified") is True:
+            rhae, mark = m["rhae"], "GREEN"
+        elif m.get("replay_verified") is False:
+            rhae, mark = m["claimed_rhae"], "RED"
+        else:
+            continue
+        state = str(m.get("state") or "-")
+        levels = str(m.get("levels") or "-")
+        model = str(m.get("model") or "-")
+        print(
+            f"{g:6} {rhae:>6.2f}% {state:10} {levels:8} "
+            f"{mark:7} {model:14}"
+        )
+    if unverified:
+        print(
+            "RED rows show claimed RHAE and are excluded from the bundle "
+            "and all means."
+        )
     print_rhae_group("clean-set", clean_summary)
     print_rhae_group("contaminated-set", contaminated_summary)
     print_rhae_group(
