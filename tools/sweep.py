@@ -433,8 +433,11 @@ def run_phase(phase: str, games: list) -> None:
                 save_ledger(ledger)
                 return
             g["fallback_done"] = True
-        g["final"] = (g["fallback"] if g["fallback"]["rhae"] > g["primary"]["rhae"]
-                      else g["primary"])
+        # A fallback can be marked done without a result — abandoned for budget, or
+        # skipped after repeated crashes. Retain the primary rather than inventing a
+        # score for a run that never finished.
+        fb = g.get("fallback")
+        g["final"] = (fb if fb and fb["rhae"] > g["primary"]["rhae"] else g["primary"])
         save_ledger(ledger)
     mean = benchmark_mean(ledger, phase, games)
     log(f"===== PHASE {phase} DONE: BENCHMARK MEAN RHAE = {mean:.2f}% "

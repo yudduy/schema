@@ -269,3 +269,25 @@ def test_a_permanently_crashing_game_is_skipped_not_phase_aborting(monkeypatch, 
     ledger = sweep.load_ledger()["sol"]
     assert "final" not in ledger.get("broken", {})
     assert ledger["ok"]["final"]["rhae"] == 100.0
+
+
+def test_final_falls_back_to_primary_when_a_fallback_was_abandoned(monkeypatch, tmp_path):
+    # A fallback can be marked done without ever producing a result — abandoned for
+    # budget, or skipped after repeated crashes. `final` must then be the primary, not
+    # a KeyError, and no score may be invented for the run that never finished.
+    monkeypatch.setattr(sweep, "LEDGER", tmp_path / "ledger.json")
+    monkeypatch.setattr(sweep, "PROGRESS", tmp_path / "progress.log")
+    monkeypatch.setattr(sweep, "_assert_lock_free", lambda: None)
+    monkeypatch.setattr(sweep, "run_game", lambda *_a, **_k: pytest.fail("must not run"))
+    sweep.save_ledger({"sol": {"sc25": {
+        "primary": {"rhae": 61.44, "state": "WIN", "levels": "6/6", "workdir": "/tmp/x"},
+        "primary_done": True,
+        "fallback_done": True,
+        "fallback_abandoned": {"reason": "budget", "actions_spent": 660},
+    }}})
+
+    sweep.run_phase("sol", ["sc25"])
+
+    rec = sweep.load_ledger()["sol"]["sc25"]
+    assert rec["final"]["rhae"] == 61.44
+    assert "fallback" not in rec
