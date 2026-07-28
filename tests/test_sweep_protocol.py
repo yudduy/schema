@@ -98,7 +98,9 @@ def test_run_game_reinvokes_after_traceback_instead_of_scoring(monkeypatch, tmp_
 
 
 def test_run_game_repeated_tracebacks_raise_without_scoring(monkeypatch, tmp_path):
-    monkeypatch.setattr(sweep, "MAX_DRIVER_RETRIES", 2)
+    # Crashes are budgeted separately from driver errors: driver errors self-heal and are
+    # ridden out, a crash usually does not and must be abandoned.
+    monkeypatch.setattr(sweep, "MAX_CRASH_RETRIES", 2)
     h = _RunGameHarness(monkeypatch, tmp_path, [
         (TRACEBACK, None),
         (TRACEBACK, None),
@@ -106,7 +108,7 @@ def test_run_game_repeated_tracebacks_raise_without_scoring(monkeypatch, tmp_pat
     ])
 
     with pytest.raises(
-        RuntimeError,
+        sweep.SweepCrashAbort,
         match=r"sc25 \[fallback\].*crashed repeatedly",
     ):
         sweep.run_game("sol", "sc25", "model", "effort", "codex", "fallback")
@@ -231,3 +233,39 @@ def test_run_phase_skips_fallback_when_primary_at_or_above_80(monkeypatch, tmp_p
     sweep.run_phase("sol", ["a"])
     assert h.calls == [("a", "primary")]
     assert sweep.load_ledger()["sol"]["a"]["final"]["rhae"] == 80.0
+
+
+def test_crash_retries_are_bounded_independently_of_driver_retries(monkeypatch, tmp_path):
+    # Driver errors (quota, network) self-heal, so they are ridden out indefinitely.
+    # A crash often does NOT self-heal — a workdir with a duplicate event seq is
+    # permanently unusable — so retrying it on the driver budget (100_000 attempts at
+    # up to 600s each) would wedge the sweep forever. The crash budget must be small.
+    assert sweep.MAX_CRASH_RETRIES < 10
+    assert sweep.MAX_CRASH_RETRIES < sweep.MAX_DRIVER_RETRIES
+
+
+def test_a_permanently_crashing_game_is_skipped_not_phase_aborting(monkeypatch, tmp_path):
+    # One unrecoverable game must not block every remaining game — that head-of-line
+    # failure is what stopped tn36 and sc25 from ever getting a fallback.
+    monkeypatch.setattr(sweep, "MAX_CRASH_RETRIES", 1)
+    monkeypatch.setattr(sweep, "LEDGER", tmp_path / "ledger.json")
+    monkeypatch.setattr(sweep, "PROGRESS", tmp_path / "progress.log")
+    monkeypatch.setattr(sweep, "_assert_lock_free", lambda: None)
+    monkeypatch.setattr(sweep, "time", type("T", (), {"sleep": staticmethod(lambda _: None),
+                                                      "strftime": staticmethod(lambda *_a: "t")})())
+    calls = []
+
+    def fake_run_game(_phase, game, _model, _effort, _provider, tag):
+        calls.append((game, tag))
+        if game == "broken":
+            raise sweep.SweepCrashAbort(f"{game} [{tag}] crashed repeatedly")
+        return {"rhae": 100.0, "state": "WIN", "levels": "1/1", "workdir": f"/tmp/{game}"}
+
+    monkeypatch.setattr(sweep, "run_game", fake_run_game)
+    sweep.run_phase("sol", ["broken", "ok"])
+
+    # "ok" still ran, and "broken" recorded no score at all.
+    assert ("ok", "primary") in calls
+    ledger = sweep.load_ledger()["sol"]
+    assert "final" not in ledger.get("broken", {})
+    assert ledger["ok"]["final"]["rhae"] == 100.0

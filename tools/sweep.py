@@ -77,6 +77,12 @@ MAX_TURNS_CAP = 400
 MAX_INVOCATIONS = 100_000        # patient: don't cap out on ride-out retries
 MAX_DRIVER_RETRIES = 100_000     # network/quota walls are ridden out, never failed
 NO_PROGRESS_GIVEUP = 3           # genuine agent stalls still move on (don't block the sweep)
+# Driver errors (quota, network) self-heal, so they are ridden out indefinitely above.
+# A crash usually does not: a workdir whose events.jsonl holds a duplicate seq is
+# permanently unusable, so retrying it on the driver budget would wedge the sweep for
+# years. Give a crash a few chances (some are transient — sp80 recovered from one),
+# then abandon the game WITHOUT scoring it.
+MAX_CRASH_RETRIES = 3
 TURN_TIMEOUT = 3600
 TURN_TOKEN_CAP = 20_000_000
 
@@ -84,6 +90,10 @@ _TRACEBACK_HEADER = "Traceback (most recent call last):"
 _TERMINAL_EXCEPTION = re.compile(
     r"(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Error|Exception):[^\r\n]*"
 )
+
+
+class SweepCrashAbort(RuntimeError):
+    """A game abandoned because its runner kept crashing. Never carries a score."""
 
 
 def log(msg: str) -> None:
@@ -260,11 +270,11 @@ def run_game(phase, game, model, effort, provider, tag) -> dict:
                 f"aborting to avoid a false-0.0 cascade; kill stray runners first")
         if _runner_crashed(out):
             crash_retries += 1
-            if crash_retries > MAX_DRIVER_RETRIES:
-                raise RuntimeError(
+            if crash_retries > MAX_CRASH_RETRIES:
+                raise SweepCrashAbort(
                     f"{game} [{tag}] crashed repeatedly "
                     f"({crash_retries} crashes; retry budget "
-                    f"{MAX_DRIVER_RETRIES}) — aborting without scoring; "
+                    f"{MAX_CRASH_RETRIES}) — abandoning without scoring; "
                     f"tail: {out.strip()[-250:]}"
                 )
             must_reinvoke_after_crash = True
@@ -385,6 +395,12 @@ def run_phase(phase: str, games: list) -> None:
                 g["primary"] = run_game(phase, game, cfg["model"],
                                         cfg["primary_effort"], cfg["provider"],
                                         "primary")
+            except SweepCrashAbort as exc:
+                # Abandon this game, score nothing for it, and keep going: one
+                # unrecoverable game must not deny every later game its run.
+                log(f"SKIP {game} (primary): {exc}")
+                save_ledger(ledger)
+                continue
             except RuntimeError as exc:
                 log(f"ABORT PHASE (primary {game}): {exc}")
                 save_ledger(ledger)
@@ -405,6 +421,13 @@ def run_phase(phase: str, games: list) -> None:
                 g["fallback"] = run_game(phase, game, cfg["fallback_model"],
                                          cfg["fallback_effort"], cfg["provider"],
                                          "fallback")
+            except SweepCrashAbort as exc:
+                # The primary score already stands; abandoning the fallback loses
+                # nothing except the retry, so keep the sweep moving.
+                log(f"SKIP {game} (fallback): {exc}")
+                g["final"] = g["primary"]
+                save_ledger(ledger)
+                continue
             except RuntimeError as exc:
                 log(f"ABORT PHASE (fallback {game}): {exc}")
                 save_ledger(ledger)
