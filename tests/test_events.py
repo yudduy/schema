@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import schema_harness.events as events_module
 from schema_harness.events import (
     ActionTaken,
@@ -143,3 +145,56 @@ def test_event_log_reopens_without_truncating_and_continues_sequence(tmp_path, m
     payloads = [json.loads(line) for line in path.read_text().splitlines()]
     assert [payload["seq"] for payload in payloads] == [1, 2]
     assert [payload["text"] for payload in payloads] == ["first", "second"]
+
+
+def test_event_log_resumes_after_an_out_of_order_flush(tmp_path, monkeypatch):
+    # A tool that finishes late can flush its (already-allocated) event after events with
+    # higher seq are on disk. Nothing is lost or duplicated — only the file's line order
+    # is non-monotonic — so reopening must resume from the highest seq rather than abort.
+    # Requiring strict file order cost two live game runs (sp80, sc25) whose crashed
+    # workdirs were then scored as real results.
+    monkeypatch.setattr(events_module.os, "fsync", lambda _: None)
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps({"seq": s, "kind": "tool_finished", "ts": 1.0})
+            for s in (1, 2, 5, 3, 4)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with EventLog(path, clock=lambda: 9.0) as event_log:
+        event_log.emit("text_delta", turn=1, text="after-resume")
+
+    payloads = [json.loads(line) for line in path.read_text().splitlines()]
+    assert payloads[-1]["seq"] == 6
+    assert payloads[-1]["text"] == "after-resume"
+
+
+def test_event_log_rejects_a_duplicate_sequence(tmp_path):
+    # A repeated seq is the genuine hazard the check exists for: two events share an
+    # identity, so a resumed writer would collide with one of them.
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps({"seq": s, "kind": "tool_finished", "ts": 1.0})
+            for s in (1, 2, 2)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate seq"):
+        EventLog(path, clock=lambda: 1.0).__enter__()
+
+
+def test_event_log_rejects_a_non_integer_sequence(tmp_path):
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        json.dumps({"seq": "3", "kind": "tool_finished", "ts": 1.0}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="seq"):
+        EventLog(path, clock=lambda: 1.0).__enter__()

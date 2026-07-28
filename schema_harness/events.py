@@ -216,15 +216,26 @@ class EventLog:
     def _last_sequence(self) -> int:
         if not self.path.exists():
             return 0
-        last_seq = 0
+        # Resume from the highest seq on disk. File order is deliberately NOT required:
+        # a tool that finishes late can flush its already-allocated event after events
+        # with higher seq are written, which loses and duplicates nothing. Demanding
+        # strict line order turned that benign interleaving into a crash, and the crashed
+        # workdir was then scored as a real result (cost the sp80 and sc25 runs).
+        # Duplicates remain fatal — that is a real identity collision a resumed writer
+        # would overwrite.
+        highest = 0
+        seen: set[int] = set()
         for line_number, payload in iter_json_objects(self.path):
             seq = payload.get("seq")
-            if type(seq) is not int or seq <= last_seq:
+            if type(seq) is not int or seq <= 0:
                 raise ValueError(
-                    f"{self.path}:{line_number}: existing seq is not strictly increasing"
+                    f"{self.path}:{line_number}: seq must be a positive integer"
                 )
-            last_seq = seq
-        return last_seq
+            if seq in seen:
+                raise ValueError(f"{self.path}:{line_number}: duplicate seq {seq}")
+            seen.add(seq)
+            highest = max(highest, seq)
+        return highest
 
     def emit(self, event: EventRecord | str, /, **payload: Any) -> dict[str, Any]:
         """Append an event record, or construct one by released kind name."""
