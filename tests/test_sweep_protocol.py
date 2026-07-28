@@ -57,10 +57,12 @@ class _RunGameHarness:
         self.run_calls = 0
         self.score_calls: list[Path] = []
         self.logs: list[str] = []
+        self.sleeps: list[int] = []
         monkeypatch.setattr(sweep, "ROOT", tmp_path)
+        monkeypatch.setattr(sweep, "LEDGER", tmp_path / "ledger.json")
         monkeypatch.setattr(sweep, "PROGRESS", tmp_path / "progress.log")
         monkeypatch.setattr(sweep, "log", self.logs.append)
-        monkeypatch.setattr(sweep.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(sweep.time, "sleep", self.sleeps.append)
         monkeypatch.setattr(sweep, "run_once", self._run_once)
         monkeypatch.setattr(sweep, "score_workdir", self._score_workdir)
 
@@ -92,6 +94,7 @@ def test_run_game_reinvokes_after_traceback_instead_of_scoring(monkeypatch, tmp_
     assert len(h.score_calls) == 1
     assert result["rhae"] == 100.0
     assert sum("crash" in line.lower() for line in h.logs) == 2
+    assert h.sleeps == [120, 240]
 
 
 def test_run_game_repeated_tracebacks_raise_without_scoring(monkeypatch, tmp_path):
@@ -109,6 +112,66 @@ def test_run_game_repeated_tracebacks_raise_without_scoring(monkeypatch, tmp_pat
         sweep.run_game("sol", "sc25", "model", "effort", "codex", "fallback")
 
     assert h.run_calls == 3
+    assert h.score_calls == []
+    assert h.sleeps == [120, 240]
+
+
+def test_run_game_retries_prior_crash_before_scoring_terminal_state(
+    monkeypatch,
+    tmp_path,
+):
+    h = _RunGameHarness(monkeypatch, tmp_path, [("completed", "WIN")])
+    wd = tmp_path / "sol-primary-sp80"
+    wd.mkdir()
+    (wd / "events.jsonl").write_text(
+        '{"kind":"run_finished","state":"WIN"}\n'
+    )
+    (tmp_path / f"runner-{wd.name}.log").write_text(TRACEBACK)
+
+    sweep.run_game("sol", "sp80", "model", "effort", "codex", "primary")
+
+    assert h.run_calls == 1
+    assert len(h.score_calls) == 1
+
+
+def test_run_game_crash_budget_resets_after_clean_invocation(monkeypatch, tmp_path):
+    monkeypatch.setattr(sweep, "MAX_DRIVER_RETRIES", 1)
+    h = _RunGameHarness(monkeypatch, tmp_path, [
+        (TRACEBACK, None),
+        ("stopping: trajectory turn cap", None),
+        (TRACEBACK, None),
+        ("completed", "WIN"),
+    ])
+
+    sweep.run_game("sol", "sp80", "model", "effort", "codex", "primary")
+
+    assert h.run_calls == 4
+    assert len(h.score_calls) == 1
+    assert h.sleeps == [120, 120]
+
+
+def test_run_game_invocation_limit_raises_without_scoring(monkeypatch, tmp_path):
+    monkeypatch.setattr(sweep, "MAX_INVOCATIONS", 1)
+    h = _RunGameHarness(monkeypatch, tmp_path, [
+        ("stopping: codex driver returned an error", None),
+    ])
+
+    with pytest.raises(RuntimeError, match=r"sp80 \[primary\].*invocation"):
+        sweep.run_game("sol", "sp80", "model", "effort", "codex", "primary")
+
+    assert h.run_calls == 1
+    assert h.score_calls == []
+
+
+def test_run_game_unknown_stop_raises_without_scoring(monkeypatch, tmp_path):
+    h = _RunGameHarness(monkeypatch, tmp_path, [
+        ("runner exited without a stop reason", None),
+    ])
+
+    with pytest.raises(RuntimeError, match=r"sp80 \[primary\].*unknown stop"):
+        sweep.run_game("sol", "sp80", "model", "effort", "codex", "primary")
+
+    assert h.run_calls == 1
     assert h.score_calls == []
 
 
@@ -129,8 +192,9 @@ def test_run_game_win_still_scores_once(monkeypatch, tmp_path):
 
 
 def test_run_game_agent_error_message_is_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.setattr(sweep, "NO_PROGRESS_GIVEUP", 1)
     h = _RunGameHarness(monkeypatch, tmp_path, [
-        ("Agent: an Error occurred in my hypothesis, so I stopped.", None),
+        ("Agent: an Error occurred in my hypothesis.\nstopping: no progress", None),
     ])
 
     sweep.run_game("sol", "sc25", "model", "effort", "codex", "primary")
