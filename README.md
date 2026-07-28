@@ -57,7 +57,13 @@ real game engine.
 Six of the eight beat the human, some by 3×. The two low scores are games where the agent
 burned a lot of moves before it worked out the mechanism — the score squares that penalty.
 
-Still to run: `sp80`, `s5i5`, `cn04`. Both low scores have already had their retry — a
+Three games are missing from that average, and one of them is going badly. `sp80`'s first
+attempt scored 0.04 — it never cleared level 1 and spent all 3,000 moves trying; its retry
+is running now and is on the final level, so it will land far above 0.04 but well below the
+others. `s5i5` and `cn04` have not started. Expect the 90.78% to fall once all three are
+in; it is an average over the 8 games that have finished, not a benchmark result.
+
+Both low scores above have already had their retry — a
 second attempt with more reasoning effort — and neither beat the first attempt, so those
 two numbers are settled. On `tn36` the retry cleared no levels at all where the first run
 won 7/7, which is worth stating plainly: more thinking did not rescue a game once the
