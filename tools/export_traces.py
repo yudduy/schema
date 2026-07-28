@@ -27,6 +27,7 @@ RELEASE = ROOT / "release"
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from schema_harness.game_identity import short_game_id  # noqa: E402
+from sweep import CLEAN, CONTAMINATED  # noqa: E402
 from verify import verify_events  # noqa: E402
 
 
@@ -65,6 +66,31 @@ def resolve_trace_workdir(
     return None, candidates
 
 
+def rhae_group(scores: dict[str, float], game_ids: list[str]) -> dict:
+    included = [game for game in game_ids if game in scores]
+    mean = (
+        round(sum(scores[game] for game in included) / len(included), 2)
+        if included else None
+    )
+    return {
+        "mean_rhae_partial": mean,
+        "n_games_included": len(included),
+        "n_games_total": len(game_ids),
+        "game_ids_included": included,
+    }
+
+
+def print_rhae_group(label: str, summary: dict, note: str = "") -> None:
+    mean = summary["mean_rhae_partial"]
+    mean_text = "N/A" if mean is None else f"{mean:.2f}%"
+    ids = ", ".join(summary["game_ids_included"]) or "(none)"
+    print(
+        f"{label} mean RHAE "
+        f"({summary['n_games_included']}/{summary['n_games_total']} verified "
+        f"games included{note}; ids: {ids}): {mean_text}"
+    )
+
+
 def main() -> None:
     phase = sys.argv[1] if len(sys.argv) > 1 else "sol"
     ledger = json.loads((ROOT / "ledger.json").read_text())
@@ -99,7 +125,7 @@ def main() -> None:
     out_traces.mkdir(parents=True, exist_ok=True)
 
     manifest = {"phase": phase, "harness_git_sha": harness_sha(), "games": {}}
-    scored = []
+    scores = {}
     unverified = []
     for game, rec in sorted(games.items()):
         final = rec.get("final")
@@ -179,22 +205,35 @@ def main() -> None:
             if (pwd / "run.json").exists():
                 shutil.copy2(pwd / "run.json", pdst / "run.json")
             manifest["games"][game]["primary_events_sha256"] = sha256(pwd / "events.jsonl")
-        scored.append(final["rhae"])
+        scores[game] = final["rhae"]
 
-    manifest["n_games_scored"] = len(scored)
+    manifest["n_games_scored"] = len(scores)
     manifest["n_unverified"] = len(unverified)
     manifest["unverified_games"] = unverified
-    manifest["benchmark_mean_rhae_partial"] = round(sum(scored) / len(scored), 2) if scored else 0.0
+    clean_summary = rhae_group(scores, CLEAN)
+    contaminated_summary = rhae_group(scores, CONTAMINATED)
+    mixed_summary = rhae_group(scores, CLEAN + CONTAMINATED)
+    mixed_summary["mixes_clean_and_contaminated"] = True
+    manifest["rhae_summary"] = {
+        "clean": clean_summary,
+        "contaminated": contaminated_summary,
+        "all_games_mixed": mixed_summary,
+    }
     (RELEASE / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
 
-    print(f"exported {len(scored)} verified games -> {RELEASE}")
+    print(f"exported {len(scores)} verified games -> {RELEASE}")
     print(f"{'game':6} {'RHAE':>7} {'state':10} {'levels':8} {'replay':7} {'model':14}")
     for g, m in sorted(manifest["games"].items()):
         if "rhae" in m:
             mark = "GREEN" if m.get("replay_verified") else "RED"
             print(f"{g:6} {m['rhae']:>6.2f}% {m['state']:10} {m['levels']:8} {mark:7} {m['model']:14}")
-    print(f"partial benchmark mean ({len(scored)} verified games): "
-          f"{manifest['benchmark_mean_rhae_partial']}%")
+    print_rhae_group("clean-set", clean_summary)
+    print_rhae_group("contaminated-set", contaminated_summary)
+    print_rhae_group(
+        "all-games mixed",
+        mixed_summary,
+        note="; mixes clean + contaminated",
+    )
     if unverified:
         print(f"UNVERIFIED (excluded): {', '.join(unverified)}")
 

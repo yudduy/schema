@@ -142,3 +142,52 @@ def test_scored_game_without_any_complete_trace_is_a_hard_error(
     assert "ERROR" in stderr
     assert "tu93" in stderr
     assert not exporter.RELEASE.exists()
+
+
+def test_manifest_and_output_split_clean_and_contaminated_means(
+    exporter, monkeypatch, capsys,
+):
+    cd82_workdir = exporter.ROOT / "recorded-cd82"
+    bp35_workdir = exporter.ROOT / "recorded-bp35"
+    cd82 = _result(cd82_workdir, 20.0)
+    bp35 = _result(bp35_workdir, 100.0)
+    _write_ledger(exporter, {
+        "cd82": {"primary": cd82, "final": cd82},
+        "bp35": {"primary": bp35, "final": bp35},
+    })
+    _write_trace(cd82_workdir, "cd82-fb555c5d")
+    _write_trace(bp35_workdir, "bp35-0a0ad940")
+    monkeypatch.setattr(exporter, "verify_events", lambda *_: _green_verdict())
+
+    exporter.main()
+
+    manifest = json.loads((exporter.RELEASE / "MANIFEST.json").read_text())
+    assert "benchmark_mean_rhae_partial" not in manifest
+    assert manifest["rhae_summary"] == {
+        "clean": {
+            "mean_rhae_partial": 20.0,
+            "n_games_included": 1,
+            "n_games_total": 11,
+            "game_ids_included": ["cd82"],
+        },
+        "contaminated": {
+            "mean_rhae_partial": 100.0,
+            "n_games_included": 1,
+            "n_games_total": 14,
+            "game_ids_included": ["bp35"],
+        },
+        "all_games_mixed": {
+            "mean_rhae_partial": 60.0,
+            "n_games_included": 2,
+            "n_games_total": 25,
+            "game_ids_included": ["cd82", "bp35"],
+            "mixes_clean_and_contaminated": True,
+        },
+    }
+    stdout = capsys.readouterr().out
+    assert "clean-set mean RHAE (1/11" in stdout
+    assert "ids: cd82" in stdout
+    assert "contaminated-set mean RHAE (1/14" in stdout
+    assert "ids: bp35" in stdout
+    assert "all-games mixed mean RHAE (2/25" in stdout
+    assert "mixes clean + contaminated" in stdout
