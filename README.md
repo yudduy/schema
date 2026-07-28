@@ -57,9 +57,13 @@ real game engine.
 Six of the eight beat the human, some by 3×. The two low scores are games where the agent
 burned a lot of moves before it worked out the mechanism — the score squares that penalty.
 
-Still to run: `sp80`, `s5i5`, `cn04`. Numbers here are a 2026-07-28 snapshot of the
-first-pass runs only; the retry pass for low scores hasn't happened yet, so they can only
-go up. Live numbers live in the `MANIFEST.json` that `tools/export_traces.py` writes.
+Still to run: `sp80`, `s5i5`, `cn04`. Both low scores have already had their retry — a
+second attempt with more reasoning effort — and neither beat the first attempt, so those
+two numbers are settled. On `tn36` the retry cleared no levels at all where the first run
+won 7/7, which is worth stating plainly: more thinking did not rescue a game once the
+agent had committed to a wrong idea of the mechanism. The protocol keeps whichever
+attempt scored higher, so a published score can never drop. Live numbers live in the
+`MANIFEST.json` that `tools/export_traces.py` writes.
 
 The other 14 public games aren't listed: the source material explains how they work, so
 they can't be honest replication evidence. They're scored separately, never mixed in.
