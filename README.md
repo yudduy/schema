@@ -55,19 +55,11 @@ better** and anything under 1.00 beat the human.
 | sc25 | 61.44 | 6/6 | 530 | 350 | 1.51× |
 | sp80, s5i5, cn04 | — | — | — | — | not yet scored |
 
-### Contaminated set — 2 of 14 scored, mean **100.00%**
-
-| game | RHAE | levels | actions | human | ratio |
-|------|-----:|-------:|--------:|------:|------:|
-| ar25 | 100.00 | 8/8 | 265 | 748 | 0.35× |
-| r11l | 100.00 | 6/6 | 168 | 233 | 0.72× |
-
-**Read this as a partial result, not a benchmark score.** Three held-out games are
-unscored, so the 90.78% is a mean over the 8 that finished; the two sets are never
-merged into one number. All runs above are the `xhigh` primary — no `<80` fallback has
-completed yet, so the figures can only improve. The five perfect games clear every level
-in 0.28–0.58× the human action count, which is the 1.6–5.0× efficiency band the original
-work reports.
+**Read the table above as a partial result, not a benchmark score.** Three held-out games
+are unscored, so 90.78% is a mean over the 8 that finished. All runs are the `xhigh`
+primary — no `<80` fallback has completed yet, so the figures can only improve. The five
+perfect games clear every level in 0.28–0.58× the human action count, inside the
+1.6–5.0× efficiency band the original work reports.
 
 This table is a snapshot and will go stale. The live source of truth is the
 `MANIFEST.json` emitted by `tools/export_traces.py`, carrying per-game RHAE, the
