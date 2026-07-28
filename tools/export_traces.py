@@ -42,10 +42,59 @@ def harness_sha() -> str:
     return r.stdout.strip() or "unknown"
 
 
+def retained_run_tag(rec: dict, final: dict) -> str:
+    """Return the durable sweep tag for a ledger result loaded from JSON."""
+    fallback = rec.get("fallback")
+    return "fallback" if fallback and final == fallback else "primary"
+
+
+def resolve_trace_workdir(
+    phase: str, game: str, rec: dict, final: dict,
+) -> tuple[Path | None, list[Path]]:
+    """Find a complete retained trace, preferring the ledger-recorded location."""
+    candidates = []
+    recorded = final.get("workdir")
+    if recorded:
+        candidates.append(Path(recorded))
+    canonical = ROOT / f"{phase}-{retained_run_tag(rec, final)}-{game}"
+    if canonical not in candidates:
+        candidates.append(canonical)
+    for workdir in candidates:
+        if (workdir / "events.jsonl").is_file() and (workdir / "run.json").is_file():
+            return workdir, candidates
+    return None, candidates
+
+
 def main() -> None:
     phase = sys.argv[1] if len(sys.argv) > 1 else "sol"
     ledger = json.loads((ROOT / "ledger.json").read_text())
     games = ledger.get(phase, {})
+
+    resolved_workdirs = {}
+    missing_traces = []
+    for game, rec in sorted(games.items()):
+        final = rec.get("final")
+        if not final:
+            continue
+        workdir, candidates = resolve_trace_workdir(phase, game, rec, final)
+        if workdir is None:
+            missing_traces.append((game, candidates))
+        else:
+            resolved_workdirs[game] = workdir
+    if missing_traces:
+        for game, candidates in missing_traces:
+            checked = ", ".join(str(path) for path in candidates)
+            print(
+                f"ERROR: scored game {game} has no complete trace; checked: "
+                f"{checked}",
+                file=sys.stderr,
+            )
+        print(
+            "ERROR: refusing to build a bundle that omits scored games",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     out_traces = RELEASE / "traces" / phase
     out_traces.mkdir(parents=True, exist_ok=True)
 
@@ -56,11 +105,8 @@ def main() -> None:
         final = rec.get("final")
         if not final:
             continue
-        wd = Path(final["workdir"])
+        wd = resolved_workdirs[game]
         ev, rj = wd / "events.jsonl", wd / "run.json"
-        if not ev.exists() or not rj.exists():
-            manifest["games"][game] = {"error": f"missing trace files at {wd}"}
-            continue
         run = json.loads(rj.read_text())
         driver = run.get("driver", {})
         # Re-execute on the ground-truth engine BEFORE publishing anything, and bind
@@ -117,7 +163,7 @@ def main() -> None:
             "model_catalog_sha256": driver.get("model_catalog_sha256"),
             "events_sha256": sha256(ev),
             "primary_rhae": rec.get("primary", {}).get("rhae"),
-            "used_fallback": "fallback" in rec and rec["final"] is rec.get("fallback"),
+            "used_fallback": retained_run_tag(rec, final) == "fallback",
             "replay_verified": True,
             "replay_steps": verdict.steps_replayed,
             "replay_grid_mismatches": verdict.grid_mismatches,
