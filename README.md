@@ -37,7 +37,7 @@ once and then computing subsequent plans inside the model.
 
 ## Results so far
 
-8 of 11 held-out games done, averaging **90.78%**. Every run below was re-verified on the
+9 of 11 held-out games done, averaging **83.49%**. Every run below was re-verified on the
 real game engine.
 
 `actions` is how many moves the agent used; `human` is what a first-time human needed.
@@ -53,23 +53,24 @@ real game engine.
 | vc33 | 92.91 | 7/7 | **363** | 447 |
 | tn36 | 71.93 | 7/7 | 2364 | 317 |
 | sc25 | 61.44 | 6/6 | 530 | 350 |
+| sp80 | 25.16 | 5/6 | 3000 | 518 |
 
-Six of the eight beat the human, some by 3×. The two low scores are games where the agent
-burned a lot of moves before it worked out the mechanism — the score squares that penalty.
+Six of the nine beat the human, some by 3×. The three low scores are games where the agent
+spent a lot of moves before working out the mechanism, and the score squares that penalty.
+`sp80` is the only game it did not finish: it cleared 5 of 6 levels, then spent its entire
+remaining budget stuck on the last one.
 
-Three games are missing from that average, and one of them is going badly. `sp80`'s first
-attempt scored 0.04 — it never cleared level 1 and spent all 3,000 moves trying; its retry
-is running now and is on the final level, so it will land far above 0.04 but well below the
-others. `s5i5` and `cn04` have not started. Expect the 90.78% to fall once all three are
-in; it is an average over the 8 games that have finished, not a benchmark result.
+All three low scores have already had their retry — a second attempt with more reasoning
+effort. Only `sp80` improved, from 0.04 to 25.16. On `tn36` and `sc25` the retry was worse
+than the first attempt, and on `tn36` it cleared no levels at all where the first run had
+won 7/7. That is worth stating plainly: more thinking did not rescue a game once the agent
+had committed to a wrong idea of the mechanism. The protocol keeps whichever attempt scored
+higher, so a published score can never drop.
 
-Both low scores above have already had their retry — a
-second attempt with more reasoning effort — and neither beat the first attempt, so those
-two numbers are settled. On `tn36` the retry cleared no levels at all where the first run
-won 7/7, which is worth stating plainly: more thinking did not rescue a game once the
-agent had committed to a wrong idea of the mechanism. The protocol keeps whichever
-attempt scored higher, so a published score can never drop. Live numbers live in the
-`MANIFEST.json` that `tools/export_traces.py` writes.
+Two games are still to run, `s5i5` and `cn04`. Neither is in the average above, so 83.49%
+is an average over the 9 games that have finished, not a benchmark result — it can still
+move in either direction. Live numbers live in the `MANIFEST.json` that
+`tools/export_traces.py` writes.
 
 The other 14 public games aren't listed: the source material explains how they work, so
 they can't be honest replication evidence. They're scored separately, never mixed in.
