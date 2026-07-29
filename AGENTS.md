@@ -52,7 +52,7 @@ For replay or scoring changes, also run the focused acceptance checks:
 
 ```bash
 uv run pytest -q tests/test_replay_bp35.py tests/test_replay_verify_gate.py
-ONLY_RESET_LEVELS=true uv run python verify.py vendor/bp35_events.jsonl --game bp35-0a0ad940
+ONLY_RESET_LEVELS=true uv run python verify.py vendor/bp35_events.jsonl
 ```
 
 Commit with `committer "<conventional message>" <exact paths...>`. Never stage the

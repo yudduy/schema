@@ -105,3 +105,47 @@ def test_intake_binds_verified_game_to_run_json_game_id(tmp_path):
         capture_output=True, text=True, cwd=str(REPO))
     assert r.returncode != 0
     assert "failed replay verification" in (r.stdout + r.stderr)
+
+
+def test_game_from_trace_reads_the_full_versioned_id():
+    # The full id binds the build: arc.make() honours the version, so deriving the
+    # short id alone would let a trace verify against a different build of the game.
+    from verify import game_from_trace
+
+    assert game_from_trace(BP35) == "bp35-0a0ad940"
+
+
+def test_game_from_trace_reads_a_game_that_is_not_the_old_default(tmp_path):
+    # Regression: the CLI used to default --game to "bp35" regardless of the trace,
+    # so verifying any other game replayed its actions on the wrong engine and
+    # printed a confident RED. The trace's own game_id is the only honest selector.
+    from verify import game_from_trace
+
+    p = _write(tmp_path, [{
+        "kind": "run_started", "seq": 1, "ts": 0.0, "game_id": "tu93-1f9c2a55",
+        "provider": "codex", "model": "m", "max_actions": 10, "win_levels": 1,
+        "workdir": "w", "resumed": False, "resumed_transitions": 0,
+    }])
+    assert game_from_trace(p) == "tu93-1f9c2a55"
+
+
+def test_game_from_trace_refuses_a_trace_that_names_no_game(tmp_path):
+    from verify import game_from_trace
+
+    p = _write(tmp_path, [{"kind": "turn_started", "seq": 1, "ts": 0.0, "turn": 1}])
+    try:
+        game_from_trace(p)
+    except ValueError:
+        return
+    raise AssertionError("a trace with no run_started must not resolve to a game")
+
+
+def test_cli_derives_the_game_with_no_flag():
+    # End-to-end: the published one-command gate must work without the operator
+    # knowing (or guessing) which game a contributed trace belongs to.
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "verify.py"), str(BP35)],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PARITY: GREEN" in proc.stdout

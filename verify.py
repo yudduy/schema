@@ -1,6 +1,6 @@
 """Replay a released gameplay trace and compare settled grids.
 
-Usage: python verify.py EVENTS_JSONL [--game bp35] [--online]
+Usage: python verify.py EVENTS_JSONL [--online]
 
 Also exposes ``verify_events(events_path, game) -> Verdict``, the reusable gate the
 intake and release-export paths use to re-execute a submitted trajectory on the
@@ -46,6 +46,23 @@ def load_trace(events):
         if type(actual) is not int or actual != expected:
             raise ValueError(f"non-contiguous step_index: expected {expected}, got {actual!r}")
     return first_turn["grid"], actions
+
+
+def game_from_trace(events_path) -> str:
+    """Return the full versioned game id the trace records for itself.
+
+    A trace is self-describing, so the operator never has to name the game — and
+    must not be able to name the wrong one. Replaying a trajectory on another
+    game's engine diverges at the first frame and reports a confident RED that
+    says nothing about the trace.
+    """
+    for _, payload in iter_json_objects(events_path):
+        if payload.get("kind") == "run_started":
+            game_id = payload.get("game_id")
+            if not isinstance(game_id, str) or not game_id:
+                raise ValueError("trace run_started event has no game_id")
+            return game_id
+    raise ValueError("trace has no run_started event naming its game")
 
 
 def grid_differences(ours, theirs):
@@ -297,12 +314,16 @@ def _verify_inner(events_path, game, *, offline: bool, verbose: bool) -> Verdict
 def main():
     parser = argparse.ArgumentParser(description="Replay a trace and verify engine parity.")
     parser.add_argument("events_jsonl", metavar="EVENTS_JSONL")
-    parser.add_argument("--game", default="bp35")
     parser.add_argument("--online", action="store_true",
                         help="verify against the default local-first engine (downloads the "
                              "game if absent) instead of the hermetic offline engine")
     args = parser.parse_args()
-    verdict = verify_events(args.events_jsonl, args.game, offline=not args.online, verbose=True)
+    try:
+        game = game_from_trace(args.events_jsonl)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}")
+        return 1
+    verdict = verify_events(args.events_jsonl, game, offline=not args.online, verbose=True)
     if verdict.error:
         print(f"error: {verdict.error}")
     return 0 if verdict.green else 1
